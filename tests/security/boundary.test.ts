@@ -115,6 +115,7 @@ describe('IPC and Electron security boundaries', () => {
     expect(main).toContain('contextIsolation: true')
     expect(main).toContain('sandbox: true')
     expect(main).toContain('nodeIntegration: false')
+    expect(main).toContain('minWidth: 960')
     expect(main).toContain('requestSingleInstanceLock')
     expect(main).toContain("on('second-instance'")
     expect(main).toContain('mainWindow.focus()')

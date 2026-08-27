@@ -403,7 +403,10 @@ function SourcePacketPanel({
             <Icon name="upload" size={20} />
           </span>
           <strong>Import a source packet to begin</strong>
-          <p>PDF, CSV, or image files stay in the local sandbox until you choose a next action.</p>
+          <p>
+            PDF, JSON, CSV, TSV, text, XML, and Markdown files stay in the local sandbox until you
+            choose a next action.
+          </p>
           <button
             type="button"
             className="button button--secondary button--small"

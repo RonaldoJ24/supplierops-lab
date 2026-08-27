@@ -177,6 +177,7 @@ button:disabled {
   align-items: center;
   gap: 24px;
   min-height: 68px;
+  min-width: 0;
   padding: 12px clamp(18px, 3vw, 40px);
   border-bottom: 1px solid var(--ink-200);
   background: color-mix(in srgb, var(--ivory-50) 94%, transparent);
@@ -188,6 +189,7 @@ button:disabled {
   align-items: center;
   gap: 10px;
   flex: 0 0 auto;
+  min-width: 0;
 }
 .brand-mark {
   display: grid;
@@ -204,6 +206,7 @@ button:disabled {
 .brand-copy {
   display: grid;
   gap: 1px;
+  min-width: 0;
 }
 .brand-copy strong {
   font-size: 14px;
@@ -216,7 +219,9 @@ button:disabled {
 .topbar__case {
   display: flex;
   align-items: baseline;
+  flex: 1 1 auto;
   gap: 9px;
+  max-width: min(520px, 38vw);
   min-width: 0;
   padding-left: 24px;
   border-left: 1px solid var(--ink-200);
@@ -227,8 +232,13 @@ button:disabled {
   text-overflow: ellipsis;
 }
 .topbar__case strong {
+  min-width: 0;
+  flex: 0 1 auto;
+  overflow: hidden;
   color: var(--ink-950);
   font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .topbar__case-label {
   color: var(--ink-500);
@@ -237,12 +247,21 @@ button:disabled {
   text-transform: uppercase;
 }
 .topbar__case-divider {
+  flex: 0 0 auto;
   color: var(--ink-400);
+}
+.topbar__case > span:last-child {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .topbar__controls {
   display: flex;
   align-items: center;
   justify-content: flex-end;
+  flex: 0 0 auto;
   gap: 8px;
   min-width: 0;
   margin-left: auto;
@@ -690,10 +709,12 @@ button:disabled {
 }
 .source-file__name {
   display: grid;
+  flex: 1 1 auto;
   min-width: 0;
   gap: 1px;
 }
 .source-file__name strong {
+  min-width: 0;
   overflow: hidden;
   color: var(--ink-900);
   font-size: 11px;
@@ -722,6 +743,7 @@ button:disabled {
   display: flex;
   flex-wrap: wrap;
   gap: 5px;
+  min-width: 0;
   margin: 9px 0 0 35px;
 }
 .citation {
@@ -729,6 +751,7 @@ button:disabled {
   align-items: center;
   gap: 4px;
   max-width: 100%;
+  min-width: 0;
   padding: 3px 6px;
   border: 1px solid color-mix(in srgb, var(--teal-500) 30%, var(--ink-200));
   border-radius: 4px;
@@ -742,6 +765,7 @@ button:disabled {
   background: var(--teal-100);
 }
 .citation span {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1969,6 +1993,9 @@ code {
 }
 
 @media (max-width: 1180px) {
+  .app-shell {
+    padding-bottom: 122px;
+  }
   .topbar {
     gap: 14px;
   }
@@ -1985,7 +2012,38 @@ code {
     display: none;
   }
   .workspace-grid {
-    grid-template-columns: minmax(190px, 0.75fr) minmax(400px, 1.7fr) minmax(225px, 0.9fr);
+    grid-template-columns: minmax(245px, 0.85fr) minmax(0, 1.5fr);
+  }
+  .agent-panel {
+    grid-column: 1 / -1;
+  }
+  .agent-panel .trace-list {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0 13px;
+  }
+  .agent-panel .next-action {
+    margin-top: 13px;
+  }
+  .agent-panel__footer {
+    margin-top: 13px;
+  }
+  .action-bar {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 8px;
+    min-height: 104px;
+    padding-top: 10px;
+    padding-bottom: 10px;
+  }
+  .action-bar__context {
+    width: 100%;
+  }
+  .action-bar__buttons {
+    width: 100%;
+    justify-content: flex-end;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    padding-bottom: 2px;
   }
 }
 
@@ -2023,19 +2081,6 @@ code {
   .workspace-grid {
     grid-template-columns: minmax(245px, 0.85fr) minmax(0, 1.5fr);
   }
-  .agent-panel {
-    grid-column: 1 / -1;
-  }
-  .agent-panel .trace-list {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 0 13px;
-  }
-  .agent-panel .next-action {
-    margin-top: 13px;
-  }
-  .agent-panel__footer {
-    margin-top: 13px;
-  }
   .comparison-table {
     min-width: 0;
     table-layout: fixed;
@@ -2072,20 +2117,6 @@ code {
   }
   .row-decision .citation {
     max-width: 92px;
-  }
-  .action-bar {
-    align-items: flex-start;
-    flex-direction: column;
-    gap: 8px;
-    padding-top: 10px;
-    padding-bottom: 10px;
-  }
-  .action-bar__context {
-    width: 100%;
-  }
-  .action-bar__buttons {
-    width: 100%;
-    justify-content: flex-end;
   }
 }
 
