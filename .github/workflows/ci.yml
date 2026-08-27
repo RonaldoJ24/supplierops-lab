@@ -1,0 +1,47 @@
+name: SupplierOps Lab CI
+
+'on':
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: supplierops-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: Quality and Electron smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      # v4.4.0
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Run quality gate
+        run: npm run check
+
+      - name: Verify headless display prerequisites
+        shell: bash
+        run: |
+          if ! command -v Xvfb >/dev/null 2>&1 || ! command -v xvfb-run >/dev/null 2>&1; then
+            echo '::error::ubuntu-latest must provide Xvfb and xvfb-run for Electron smoke tests.' >&2
+            exit 1
+          fi
+          xvfb-run --auto-servernum --server-args='-screen 0 1440x900x24' true
+
+      - name: Run headless Electron smoke
+        shell: bash
+        run: xvfb-run --auto-servernum --server-args='-screen 0 1440x900x24' npm run e2e -- --reporter=line
