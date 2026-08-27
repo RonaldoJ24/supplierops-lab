@@ -1,0 +1,29 @@
+node_modules/
+out/
+dist/
+release/
+coverage/
+playwright-report/
+test-results/
+*.log
+*.db
+*.db-shm
+*.db-wal
+*.tsbuildinfo
+.DS_Store
+
+# Local secrets and machine-specific configuration.
+.env
+.env.*
+!.env.example
+
+# Local application state and generated evaluation artifacts.
+.supplierops/
+runtime-data/
+
+# Generated JavaScript must never shadow TypeScript sources.
+src/**/*.js
+src/**/*.js.map
+src/**/*.d.ts
+!src/renderer/src/env.d.ts
+electron.vite.config.js
