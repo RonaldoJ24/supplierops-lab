@@ -7,8 +7,13 @@ import {
 } from 'electron'
 import { readFileSync, statSync } from 'node:fs'
 import { basename, extname } from 'node:path'
-import { MAX_SOURCE_PACKET_BYTES, MAX_SOURCE_PACKET_PREVIEW_CHARS } from './constants'
-import { IPC_CHANNELS } from '../shared/api'
+import {
+  MAX_SOURCE_PACKET_BYTES,
+  MAX_SOURCE_PACKET_FILES,
+  MAX_SOURCE_PACKET_PREVIEW_CHARS,
+  MAX_SOURCE_PACKET_TOTAL_BYTES,
+} from './constants'
+import { IPC_CHANNELS, parseApiInput, parseApiOutput, type ApiOperationName } from '../shared/api'
 import { redactError } from './redaction'
 import type { SelectedSourcePacket, WorkspaceService } from './workspace'
 
@@ -21,6 +26,16 @@ interface TrustedRendererOrigin {
   host: string
   port: string
 }
+
+const SUPPORTED_SOURCE_EXTENSIONS = new Set([
+  '.json',
+  '.csv',
+  '.tsv',
+  '.txt',
+  '.xml',
+  '.md',
+  '.pdf',
+])
 
 function trustedOriginFromUrl(url: string | undefined): TrustedRendererOrigin | undefined {
   if (!url) return undefined
@@ -62,21 +77,25 @@ function assertTrustedSender(event: IpcMainInvokeEvent, devOrigin?: TrustedRende
 
 function readTextPreview(filePath: string, size: number): string | undefined {
   const extension = extname(filePath).toLowerCase()
-  const textual = new Set(['.txt', '.csv', '.tsv', '.json', '.xml', '.html', '.md'])
+  const textual = new Set(['.txt', '.csv', '.tsv', '.json', '.xml', '.md'])
   if (!textual.has(extension)) return undefined
 
   const previewBytes = Math.min(size, MAX_SOURCE_PACKET_PREVIEW_CHARS * 4)
-  return readFileSync(filePath, { encoding: 'utf8', flag: 'r' })
-    .slice(0, previewBytes)
-    .slice(0, MAX_SOURCE_PACKET_PREVIEW_CHARS)
+  try {
+    return readFileSync(filePath, { encoding: 'utf8', flag: 'r' })
+      .slice(0, previewBytes)
+      .slice(0, MAX_SOURCE_PACKET_PREVIEW_CHARS)
+  } catch {
+    throw new Error('Selected source packet could not be read')
+  }
 }
 
 async function selectSourcePacket(mainWindow: BrowserWindow | null): Promise<SelectedSourcePacket> {
   const options: OpenDialogOptions = {
     title: 'Import source packet',
-    properties: ['openFile'],
+    properties: ['openFile', 'multiSelections'],
     filters: [
-      { name: 'Source packets', extensions: ['json', 'csv', 'tsv', 'txt', 'xml', 'pdf'] },
+      { name: 'Source packets', extensions: ['json', 'csv', 'tsv', 'txt', 'xml', 'md', 'pdf'] },
       { name: 'All files', extensions: ['*'] },
     ],
   }
@@ -87,30 +106,63 @@ async function selectSourcePacket(mainWindow: BrowserWindow | null): Promise<Sel
     throw new Error('Source packet import cancelled')
   }
 
-  const filePath = selection.filePaths[0]
-  if (!filePath) throw new Error('Source packet import cancelled')
-
-  const stats = statSync(filePath)
-  if (!stats.isFile()) throw new Error('Selected source packet is not a file')
-  if (stats.size > MAX_SOURCE_PACKET_BYTES) {
-    throw new Error(`Source packet exceeds the ${MAX_SOURCE_PACKET_BYTES} byte limit`)
+  if (selection.filePaths.length > MAX_SOURCE_PACKET_FILES) {
+    throw new Error(`Source packet must contain at most ${MAX_SOURCE_PACKET_FILES} files`)
   }
 
-  const fileName = basename(filePath).slice(0, 180)
-  const extension = extname(fileName).toLowerCase().slice(1) || 'unknown'
-  const preview = readTextPreview(filePath, stats.size)
-  return {
-    fileName,
-    extension,
-    byteSize: stats.size,
-    preview,
-  }
+  let totalBytes = 0
+  return selection.filePaths.map((filePath) => {
+    const extension = extname(filePath).toLowerCase()
+    if (!SUPPORTED_SOURCE_EXTENSIONS.has(extension)) {
+      throw new Error('Unsupported source packet type')
+    }
+    let stats: ReturnType<typeof statSync>
+    try {
+      stats = statSync(filePath)
+    } catch {
+      throw new Error('Selected source packet is unavailable')
+    }
+    if (!stats.isFile()) throw new Error('Selected source packet is not a file')
+    if (stats.size > MAX_SOURCE_PACKET_BYTES) {
+      throw new Error(`A source packet file exceeds the ${MAX_SOURCE_PACKET_BYTES} byte limit`)
+    }
+    totalBytes += stats.size
+    if (totalBytes > MAX_SOURCE_PACKET_TOTAL_BYTES) {
+      throw new Error('Source packet exceeds the aggregate byte limit')
+    }
+
+    const fileName = basename(filePath).slice(0, 180)
+    const normalizedExtension = extension.slice(1)
+    const preview = readTextPreview(filePath, stats.size)
+    return {
+      fileName,
+      extension: normalizedExtension,
+      byteSize: stats.size,
+      ...(preview === undefined ? {} : { preview }),
+    }
+  })
 }
 
-function normalizeError(error: unknown): {
+function normalizeError(
+  error: unknown,
+  workspace?: WorkspaceService,
+): {
   error: { name: string; message: string; failureId: string }
 } {
-  return { error: redactError(error) }
+  return { error: workspace?.failureProjection(error) ?? redactError(error) }
+}
+
+async function dispatchValidated(
+  event: IpcMainInvokeEvent,
+  rendererUrl: TrustedRendererOrigin | undefined,
+  operation: ApiOperationName,
+  input: unknown,
+  action: (parsedInput: unknown) => unknown,
+): Promise<unknown> {
+  assertTrustedSender(event, rendererUrl)
+  const parsedInput = parseApiInput(operation, input)
+  const output = await action(parsedInput)
+  return parseApiOutput(operation, output)
 }
 
 /** Register the allowlisted renderer-to-main operations. */
@@ -124,65 +176,80 @@ export function registerIpcHandlers(
     [
       IPC_CHANNELS.bootstrap,
       (event, input) => {
-        assertTrustedSender(event, devOrigin)
-        return services.workspace.bootstrap(input ?? {})
+        return dispatchValidated(event, devOrigin, 'bootstrap', input ?? {}, (parsedInput) =>
+          services.workspace.bootstrap(parsedInput),
+        )
       },
     ],
     [
       IPC_CHANNELS.loadScenario,
       (event, input) => {
-        assertTrustedSender(event, devOrigin)
-        return services.workspace.loadScenario(input)
+        return dispatchValidated(event, devOrigin, 'loadScenario', input, (parsedInput) =>
+          services.workspace.loadScenario(parsedInput),
+        )
       },
     ],
     [
       IPC_CHANNELS.runScenario,
       (event, input) => {
-        assertTrustedSender(event, devOrigin)
-        return services.workspace.runScenario(input)
+        return dispatchValidated(event, devOrigin, 'runScenario', input, (parsedInput) =>
+          services.workspace.runScenario(parsedInput),
+        )
       },
     ],
     [
       IPC_CHANNELS.createCorrectionDraft,
       (event, input) => {
-        assertTrustedSender(event, devOrigin)
-        return services.workspace.createCorrectionDraft(input)
+        return dispatchValidated(event, devOrigin, 'createCorrectionDraft', input, (parsedInput) =>
+          services.workspace.createCorrectionDraft(parsedInput),
+        )
       },
     ],
     [
       IPC_CHANNELS.approveDraft,
       (event, input) => {
-        assertTrustedSender(event, devOrigin)
-        return services.workspace.approveDraft(input)
+        return dispatchValidated(event, devOrigin, 'approveDraft', input, (parsedInput) =>
+          services.workspace.approveDraft(parsedInput),
+        )
       },
     ],
     [
       IPC_CHANNELS.submitDraft,
       (event, input) => {
-        assertTrustedSender(event, devOrigin)
-        return services.workspace.submitDraft(input)
+        return dispatchValidated(event, devOrigin, 'submitDraft', input, (parsedInput) =>
+          services.workspace.submitDraft(parsedInput),
+        )
       },
     ],
     [
       IPC_CHANNELS.replayFailure,
       (event, input) => {
-        assertTrustedSender(event, devOrigin)
-        return services.workspace.replayFailure(input)
+        return dispatchValidated(event, devOrigin, 'replayFailure', input, (parsedInput) =>
+          services.workspace.replayFailure(parsedInput),
+        )
       },
     ],
     [
       IPC_CHANNELS.saveRegression,
       (event, input) => {
-        assertTrustedSender(event, devOrigin)
-        return services.workspace.saveRegression(input)
+        return dispatchValidated(event, devOrigin, 'saveRegression', input, (parsedInput) =>
+          services.workspace.saveRegression(parsedInput),
+        )
       },
     ],
     [
       IPC_CHANNELS.importSourcePacket,
       async (event, input) => {
-        assertTrustedSender(event, devOrigin)
-        const selected = await selectSourcePacket(mainWindow)
-        return services.workspace.importSourcePacket(input, selected)
+        return dispatchValidated(
+          event,
+          devOrigin,
+          'importSourcePacket',
+          input,
+          async (parsedInput) => {
+            const selected = await selectSourcePacket(mainWindow)
+            return services.workspace.importSourcePacket(parsedInput, selected)
+          },
+        )
       },
     ],
   ]
@@ -193,7 +260,7 @@ export function registerIpcHandlers(
         return await handler(event, ...args)
       } catch (error) {
         // Return a stable, redacted diagnostic shape; never echo payloads or secrets.
-        return normalizeError(error)
+        return normalizeError(error, services.workspace)
       }
     })
   }

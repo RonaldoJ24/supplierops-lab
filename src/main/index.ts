@@ -17,19 +17,22 @@ import { redactError } from './redaction'
 import { WorkspaceService } from './workspace'
 
 const currentDirectory = dirname(fileURLToPath(import.meta.url))
+const hasSingleInstanceLock = app.requestSingleInstanceLock()
 
-protocol.registerSchemesAsPrivileged([
-  {
-    scheme: APP_PROTOCOL,
-    privileges: {
-      standard: true,
-      secure: true,
-      supportFetchAPI: true,
-      corsEnabled: true,
-      stream: true,
+if (hasSingleInstanceLock) {
+  protocol.registerSchemesAsPrivileged([
+    {
+      scheme: APP_PROTOCOL,
+      privileges: {
+        standard: true,
+        secure: true,
+        supportFetchAPI: true,
+        corsEnabled: true,
+        stream: true,
+      },
     },
-  },
-])
+  ])
+}
 
 let mainWindow: BrowserWindow | null = null
 let workspaceStore: WorkspaceStore | undefined
@@ -50,8 +53,26 @@ function isLoopbackRendererUrl(value: string | undefined): value is string {
   }
 }
 
+/** E2E may provide an isolated temporary profile; production ignores this hook. */
+function configureTestUserDataDirectory(): void {
+  const candidate = process.env.SUPPLIEROPS_E2E_USER_DATA
+  if (process.env.NODE_ENV !== 'test' || !candidate || !isAbsolute(candidate)) return
+  app.setPath('userData', candidate)
+}
+
+function providerOptionsForRuntime(): { loadFromEnvironment: boolean } {
+  return { loadFromEnvironment: process.env.NODE_ENV !== 'test' }
+}
+
 function rendererOutputDirectory(): string {
-  return resolve(app.getAppPath(), 'out/renderer')
+  const candidates = [
+    resolve(app.getAppPath(), 'out/renderer'),
+    resolve(currentDirectory, '../renderer'),
+  ]
+  return (
+    candidates.find((candidate) => existsSync(candidate)) ??
+    resolve(currentDirectory, '../renderer')
+  )
 }
 
 function resolveRendererAsset(pathname: string): string | undefined {
@@ -92,6 +113,7 @@ async function handleAppProtocol(request: Request): Promise<Response> {
 function installNavigationGuards(window: BrowserWindow): void {
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
   window.webContents.on('will-navigate', (event) => event.preventDefault())
+  window.webContents.on('will-frame-navigate', (event) => event.preventDefault())
   window.webContents.on('will-redirect', (event) => event.preventDefault())
   window.webContents.on('will-attach-webview', (event) => event.preventDefault())
 
@@ -166,7 +188,11 @@ async function startApplication(): Promise<void> {
 
   workspaceStore = new WorkspaceStore(join(app.getPath('userData'), 'supplierops.sqlite'))
   workspaceStore.open()
-  const provider = new ProviderBoundary(workspaceStore, app.getAppPath())
+  const provider = new ProviderBoundary(
+    workspaceStore,
+    app.getAppPath(),
+    providerOptionsForRuntime(),
+  )
   const workspace = new WorkspaceService(workspaceStore, provider)
 
   mainWindow = createMainWindow()
@@ -177,35 +203,52 @@ async function startApplication(): Promise<void> {
   await loadRenderer(mainWindow)
 }
 
-app
-  .whenReady()
-  .then(() => startApplication())
-  .catch((error: unknown) => {
-    console.error('SupplierOps Lab failed to start', redactError(error).failureId)
-    app.quit()
+if (hasSingleInstanceLock) {
+  configureTestUserDataDirectory()
+
+  app.on('second-instance', () => {
+    if (!mainWindow) return
+    if (mainWindow.isMinimized()) mainWindow.restore()
+    mainWindow.show()
+    mainWindow.focus()
   })
 
-app.on('activate', () => {
-  if (BrowserWindow.getAllWindows().length === 0 && workspaceStore) {
-    mainWindow = createMainWindow()
-    const rendererUrl = isLoopbackRendererUrl(process.env.ELECTRON_RENDERER_URL)
-      ? process.env.ELECTRON_RENDERER_URL
-      : undefined
+  app
+    .whenReady()
+    .then(() => startApplication())
+    .catch((error: unknown) => {
+      console.error('SupplierOps Lab failed to start', redactError(error).failureId)
+      app.quit()
+    })
+
+  app.on('activate', () => {
+    if (BrowserWindow.getAllWindows().length === 0 && workspaceStore) {
+      mainWindow = createMainWindow()
+      const rendererUrl = isLoopbackRendererUrl(process.env.ELECTRON_RENDERER_URL)
+        ? process.env.ELECTRON_RENDERER_URL
+        : undefined
+      unregisterIpc?.()
+      const provider = new ProviderBoundary(
+        workspaceStore,
+        app.getAppPath(),
+        providerOptionsForRuntime(),
+      )
+      const workspace = new WorkspaceService(workspaceStore, provider)
+      unregisterIpc = registerIpcHandlers(mainWindow, { workspace }, rendererUrl)
+      void loadRenderer(mainWindow)
+    }
+  })
+
+  app.on('before-quit', () => {
     unregisterIpc?.()
-    const provider = new ProviderBoundary(workspaceStore, app.getAppPath())
-    const workspace = new WorkspaceService(workspaceStore, provider)
-    unregisterIpc = registerIpcHandlers(mainWindow, { workspace }, rendererUrl)
-    void loadRenderer(mainWindow)
-  }
-})
+    unregisterIpc = undefined
+    workspaceStore?.close()
+    workspaceStore = undefined
+  })
 
-app.on('before-quit', () => {
-  unregisterIpc?.()
-  unregisterIpc = undefined
-  workspaceStore?.close()
-  workspaceStore = undefined
-})
-
-app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') app.quit()
-})
+  app.on('window-all-closed', () => {
+    if (process.platform !== 'darwin') app.quit()
+  })
+} else {
+  app.quit()
+}

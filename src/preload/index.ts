@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { ApiContract } from '../shared/api'
 import { IPC_CHANNELS } from '../shared/api'
+import { unwrapErrorEnvelope } from './errors'
 
 type ApiFunction = (...args: never[]) => Promise<unknown>
 type ApiMethod<K extends keyof ApiContract> = Extract<ApiContract[K], ApiFunction>
@@ -10,7 +11,7 @@ function invoke<K extends keyof ApiContract>(
   channel: string,
   ...args: Parameters<ApiMethod<K>>
 ): ReturnType<ApiMethod<K>> {
-  return ipcRenderer.invoke(channel, ...args) as ReturnType<ApiMethod<K>>
+  return ipcRenderer.invoke(channel, ...args).then(unwrapErrorEnvelope) as ReturnType<ApiMethod<K>>
 }
 
 /**

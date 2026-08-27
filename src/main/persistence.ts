@@ -7,6 +7,7 @@ import { serializeProjection } from './redaction'
 
 const MAX_RECORD_ID_LENGTH = 160
 const MAX_LIST_SIZE = 100
+const SQLITE_BUSY_TIMEOUT_MS = 5_000
 
 type SqliteRow = Record<string, unknown>
 
@@ -37,6 +38,7 @@ export interface WorkspaceBootstrap {
 export class WorkspaceStore {
   private database: DatabaseSync | undefined
   private writeQueue: Promise<void> = Promise.resolve()
+  private readonly redactionSecrets = new Set<string>()
 
   public constructor(private readonly databasePath: string) {}
 
@@ -44,9 +46,24 @@ export class WorkspaceStore {
     if (this.database) return
 
     mkdirSync(dirname(this.databasePath), { recursive: true })
-    const database = new DatabaseSync(this.databasePath)
+    const database = new DatabaseSync(this.databasePath, {
+      allowExtension: false,
+      enableForeignKeyConstraints: true,
+      timeout: SQLITE_BUSY_TIMEOUT_MS,
+    })
     database.exec('PRAGMA journal_mode = WAL;')
+    database.exec(`PRAGMA busy_timeout = ${SQLITE_BUSY_TIMEOUT_MS};`)
     database.exec('PRAGMA foreign_keys = ON;')
+    database.exec('PRAGMA synchronous = FULL;')
+    database.exec('PRAGMA trusted_schema = OFF;')
+
+    const quickCheck = database.prepare('PRAGMA quick_check').get() as SqliteRow | undefined
+    const quickCheckValue = String(quickCheck?.quick_check ?? quickCheck?.['quick_check(10)'] ?? '')
+    if (quickCheckValue !== 'ok') {
+      database.close()
+      throw new Error('Local workspace database quick_check failed')
+    }
+
     database.exec(`
       CREATE TABLE IF NOT EXISTS app_meta (
         key TEXT PRIMARY KEY NOT NULL,
@@ -87,6 +104,11 @@ export class WorkspaceStore {
   public close(): void {
     this.database?.close()
     this.database = undefined
+  }
+
+  /** Register a main-process secret for projection-wide redaction. */
+  public registerRedactionSecret(secret: string | undefined): void {
+    if (typeof secret === 'string' && secret.length >= 4) this.redactionSecrets.add(secret)
   }
 
   public bootstrap(): WorkspaceBootstrap {
@@ -143,7 +165,9 @@ export class WorkspaceStore {
   ): Promise<StoredProjection> {
     const normalizedNamespace = this.normalizeNamespace(namespace)
     const normalizedId = this.normalizeId(id ?? randomUUID())
-    const projection = serializeProjection(value, MAX_PERSISTED_PROJECTION_BYTES)
+    const projection = serializeProjection(value, MAX_PERSISTED_PROJECTION_BYTES, [
+      ...this.redactionSecrets,
+    ])
     const now = new Date().toISOString()
 
     return this.enqueueWrite(() => {
