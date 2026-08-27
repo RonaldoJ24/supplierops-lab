@@ -32,6 +32,7 @@ import {
 import { reconcile, runReconciliation } from './engine'
 import { approveDraft, createCorrectionDraft, submitDraft } from './state'
 import { stableId } from './stable'
+import { evaluateScenarioRun } from './evaluation'
 
 function loadedWorkspace(input: ReconciliationInput): CaseWorkspace {
   const reconciled = reconcile(input)
@@ -125,6 +126,7 @@ export class SupplierOpsService implements ApiContract {
     input: Parameters<ApiContract['runScenario']>[0],
   ): Promise<RunScenarioOutput> {
     const parsed = parseApiInput('runScenario', input)
+    const fixture = loadScenarioFixture(parsed.scenarioId)
     const fixtureInput = fixtureInputForMode(parsed.scenarioId, parsed.mode)
     const reconciliationInput: ReconciliationInput = ReconciliationInputSchema.parse({
       ...fixtureInput,
@@ -135,7 +137,7 @@ export class SupplierOpsService implements ApiContract {
     const result = runReconciliation(reconciliationInput)
     const idempotencyKey =
       parsed.idempotencyKey ?? fixtureIdempotencyKey(parsed.scenarioId, `run:${parsed.mode}`)
-    const workspace = result.workspace
+    const workspace = evaluateScenarioRun(fixture, reconciliationInput, result).workspace
     this.workspaces.set(workspace.caseMetadata.caseId, workspace)
     const output = {
       workspace,
@@ -243,10 +245,26 @@ export class SupplierOpsService implements ApiContract {
     input: Parameters<ApiContract['importSourcePacket']>[0],
   ): Promise<ImportSourcePacketOutput> {
     const parsed = parseApiInput('importSourcePacket', input)
+    const sourceId = stableId('source', parsed.caseMetadata.caseId, parsed.at)
+    const sourcePacket = [
+      {
+        sourceId,
+        kind: 'other' as const,
+        name: 'selected-source-packet',
+        pageCount: 1,
+        contentType: 'structured' as const,
+        content:
+          'Source packet selected by the main-process chooser; extraction remains bounded data.',
+        trustBoundary: 'untrusted' as const,
+        quarantined: false,
+        quarantineReason: null,
+        evidence: [],
+      },
+    ]
     const workspace = CaseWorkspaceSchema.parse({
       caseMetadata: parsed.caseMetadata,
       workflow: { phase: 'source_loaded', status: 'ready', revision: 0 },
-      sourcePacket: parsed.sourcePacket,
+      sourcePacket,
       extracted: { invoice: null, purchaseOrder: null, contract: null, catalog: null },
       lineComparisons: [],
       discrepancies: [],
@@ -267,9 +285,7 @@ export class SupplierOpsService implements ApiContract {
           actor: 'system',
           at: parsed.at,
           message: 'Source packet imported as untrusted auditable data.',
-          evidenceIds: parsed.sourcePacket.flatMap((entry) =>
-            entry.evidence.map((item) => item.evidenceId),
-          ),
+          evidenceIds: [],
         },
       ],
       correctionDraft: null,

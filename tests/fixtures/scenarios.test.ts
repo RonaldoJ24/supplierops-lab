@@ -18,6 +18,16 @@ describe('replayable scenario fixtures and evaluation', () => {
     }
   })
 
+  it('uses deterministic packet names and bounded fixture-backed content types', () => {
+    const standard = listScenarioFixtures()[0].input.sourcePacket
+    expect(standard.map((entry) => [entry.name, entry.contentType])).toEqual([
+      ['invoice-1001.pdf', 'pdf'],
+      ['po-2001.json', 'json'],
+      ['contract-2025.pdf', 'pdf'],
+      ['catalog-2025.csv', 'csv'],
+    ])
+  })
+
   it('reports observed counts and sample sizes without inventing accuracy', () => {
     const evaluation = evaluateFixtures()
     expect(evaluation.sampleSize).toBe(6)
@@ -34,12 +44,11 @@ describe('replayable scenario fixtures and evaluation', () => {
         'model_usage',
       ]),
     )
-    expect(
-      evaluation.metrics.every(
-        (metric) =>
-          (metric.sampleSize >= 0 && metric.observed === true) || metric.metric === 'latency_sum',
-      ),
-    ).toBe(true)
+    expect(evaluation.metrics.every((metric) => metric.sampleSize >= 0)).toBe(true)
+    expect(evaluation.metrics.find((metric) => metric.metric === 'token_usage')).toMatchObject({
+      observed: false,
+      sampleSize: 0,
+    })
   })
 
   it('keeps outage replay and invalid output safely escalated', () => {

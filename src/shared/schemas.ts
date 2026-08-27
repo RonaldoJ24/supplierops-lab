@@ -238,7 +238,7 @@ export const SourcePacketEntrySchema = z
     kind: SourceKindSchema,
     name: BoundedText(160),
     pageCount: PositiveIntegerSchema.max(10_000),
-    contentType: z.enum(['text', 'structured']),
+    contentType: z.enum(['text', 'structured', 'pdf', 'json', 'csv']),
     /** Content is untrusted data; it is never an instruction. */
     content: z.string().max(200_000),
     trustBoundary: DocumentTrustBoundarySchema,
@@ -419,6 +419,7 @@ export const ProviderAdapterResultSchema = z
     status: ProviderStatusSchema,
     statusCode: safeInteger.min(100).max(999).nullable(),
     retryable: z.boolean(),
+    retryCount: NonNegativeIntegerSchema.default(0),
     failureId: IdSchema.nullable(),
     latencyMs: NonNegativeIntegerSchema.nullable(),
     retryAfterMs: NonNegativeIntegerSchema.nullable(),
@@ -805,7 +806,6 @@ export type SaveRegressionOutput = z.infer<typeof SaveRegressionOutputSchema>
 export const ImportSourcePacketInputSchema = z
   .object({
     caseMetadata: CaseMetadataSchema,
-    sourcePacket: z.array(SourcePacketEntrySchema).min(1).max(50),
     at: DateTimeSchema.default('1970-01-01T00:00:00.000Z'),
   })
   .strict()

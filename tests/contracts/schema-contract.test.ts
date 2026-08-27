@@ -73,4 +73,25 @@ describe('strict shared contracts', () => {
     ).toThrow()
     expect(Object.keys(API_INPUT_SCHEMAS)).toHaveLength(9)
   })
+
+  it('keeps source import chooser-owned at the IPC boundary', () => {
+    const caseMetadata = {
+      caseId: 'case:chooser',
+      scenarioId: 'clean-match',
+      supplierId: 'supplier:acme',
+      supplierName: 'Acme Industrial Supplies',
+      openedAt: '2025-01-15T10:00:00.000Z',
+      sourceFingerprint: 'fingerprint:chooser',
+      invoiceNumber: 'INV-1001',
+    }
+    expect(parseApiInput('importSourcePacket', { caseMetadata }).at).toBe(
+      '1970-01-01T00:00:00.000Z',
+    )
+    expect(() =>
+      parseApiInput('importSourcePacket', {
+        caseMetadata,
+        sourcePacket: [],
+      }),
+    ).toThrow()
+  })
 })
