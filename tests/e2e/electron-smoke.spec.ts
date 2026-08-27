@@ -19,6 +19,15 @@ function electronLaunchArgs(userDataDirectory: string) {
   ]
 }
 
+function electronLaunchEnv(userDataDirectory: string) {
+  return {
+    ...process.env,
+    NODE_ENV: 'test',
+    ELECTRON_RENDERER_URL: '',
+    SUPPLIEROPS_E2E_USER_DATA: userDataDirectory,
+  }
+}
+
 async function expectResponsiveLayout(page: Page, viewport: (typeof responsiveViewports)[number]) {
   await page.setViewportSize(viewport)
   await expect
@@ -58,11 +67,7 @@ test('production Electron price-mismatch path keeps approval and submission sepa
       // Launch the repository package so Electron resolves its declared main
       // entry and app.getAppPath() has production package semantics.
       args: electronLaunchArgs(userDataDirectory),
-      env: {
-        NODE_ENV: 'test',
-        ELECTRON_RENDERER_URL: '',
-        SUPPLIEROPS_E2E_USER_DATA: userDataDirectory,
-      },
+      env: electronLaunchEnv(userDataDirectory),
     })
 
     const appPath = await app.evaluate(({ app: electronApp }) => electronApp.getAppPath())
@@ -124,11 +129,7 @@ test('production Electron layout keeps the action bar bounded', async () => {
   try {
     app = await electron.launch({
       args: electronLaunchArgs(userDataDirectory),
-      env: {
-        NODE_ENV: 'test',
-        ELECTRON_RENDERER_URL: '',
-        SUPPLIEROPS_E2E_USER_DATA: userDataDirectory,
-      },
+      env: electronLaunchEnv(userDataDirectory),
     })
     const page = await app.firstWindow()
     await page.waitForLoadState('domcontentloaded')
