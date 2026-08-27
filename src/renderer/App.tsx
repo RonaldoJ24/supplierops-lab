@@ -1,9 +1,9 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import type { ApiContract } from '../shared/api'
+import { SCENARIO_IDS, type ProviderMode } from '../shared/domain'
 import { AppErrorBoundary } from './components/AppErrorBoundary'
 import { Icon, type IconName } from './components/Icon'
 import {
-  SCENARIO_IDS,
   SCENARIO_META,
   type EvidenceRef,
   type LineComparisonView,
@@ -208,6 +208,10 @@ function TopBar({
   workspace,
   scenarioId,
   apiAvailable,
+  providerMode,
+  onProviderMode,
+  onRun,
+  isRunning,
   onScenario,
   onReplay,
   onSave,
@@ -218,6 +222,10 @@ function TopBar({
   workspace: WorkspaceView
   scenarioId: ScenarioId
   apiAvailable: boolean
+  providerMode: ProviderMode
+  onProviderMode: (mode: ProviderMode) => void
+  onRun: () => void
+  isRunning: boolean
   onScenario: (scenarioId: ScenarioId) => void
   onReplay: () => void
   onSave: () => void
@@ -253,7 +261,7 @@ function TopBar({
         </span>
         <span className="provider-indicator" title="No live supplier system is connected">
           <Icon name="shield" size={14} />
-          {apiAvailable ? 'Adapter ready' : 'Offline path'}
+          {apiAvailable ? 'Desktop bridge available' : 'Desktop bridge unavailable'}
         </span>
         <label className="scenario-control">
           <span className="sr-only">Choose scenario</span>
@@ -270,6 +278,41 @@ function TopBar({
           </select>
           <Icon name="chevron-down" size={14} />
         </label>
+        <label
+          className={classNames(
+            'provider-control',
+            scenarioId === 'prompt-injection' && 'provider-control--locked',
+          )}
+          title={
+            scenarioId === 'prompt-injection'
+              ? 'Prompt-injection cases cannot call a provider.'
+              : scenarioId === 'clean-match' || scenarioId === 'price-mismatch'
+                ? 'This scenario uses deterministic controls; AI is not needed, even if provider mode is selected.'
+                : 'Provider mode may send bounded document excerpts to DeepSeek.'
+          }
+        >
+          <span className="sr-only">Provider mode</span>
+          <select
+            value={providerMode}
+            onChange={(event) => onProviderMode(event.target.value as ProviderMode)}
+            disabled={isRunning || scenarioId === 'prompt-injection'}
+            aria-label="Provider mode"
+          >
+            <option value="offline">Offline</option>
+            <option value="provider">DeepSeek provider</option>
+          </select>
+          <Icon name="chevron-down" size={14} />
+        </label>
+        <button
+          type="button"
+          className="button button--small button--secondary topbar__run"
+          onClick={onRun}
+          disabled={isRunning}
+          aria-label="Run current scenario"
+        >
+          <Icon name={isRunning ? 'refresh' : 'play'} size={14} />
+          {isRunning ? 'Running…' : 'Run'}
+        </button>
         <button
           type="button"
           className="icon-button topbar__action"
@@ -319,10 +362,9 @@ function SourcePacketPanel({
 }: {
   workspace: WorkspaceView
   onEvidence: (evidence: EvidenceRef) => void
-  onImport: (file: File) => void
+  onImport: () => void
   importNotice?: string
 }) {
-  const inputRef = useRef<HTMLInputElement>(null)
   const hasFiles = workspace.sourcePacket.files.length > 0 && workspace.status !== 'empty'
   return (
     <section className="panel source-panel" aria-labelledby="source-packet-heading">
@@ -331,7 +373,18 @@ function SourcePacketPanel({
           <p className="eyebrow">Evidence boundary</p>
           <h2 id="source-packet-heading">Source packet</h2>
         </div>
-        <span className="panel__count">{workspace.sourcePacket.files.length || 0} files</span>
+        <div className="panel__header-actions">
+          <span className="panel__count">{workspace.sourcePacket.files.length || 0} files</span>
+          <button
+            type="button"
+            className="icon-button"
+            onClick={onImport}
+            aria-label="Import source packet"
+            title="Open desktop source chooser"
+          >
+            <Icon name="upload" size={15} />
+          </button>
+        </div>
       </div>
       <p className="panel__intro">
         Only this packet can ground the reconciliation. Document instructions are never treated as
@@ -351,23 +404,15 @@ function SourcePacketPanel({
           </span>
           <strong>Import a source packet to begin</strong>
           <p>PDF, CSV, or image files stay in the local sandbox until you choose a next action.</p>
-          <label className="button button--secondary button--small" htmlFor="source-packet-upload">
+          <button
+            type="button"
+            className="button button--secondary button--small"
+            onClick={onImport}
+          >
             <Icon name="upload" size={14} /> Import packet
-          </label>
+          </button>
         </div>
       )}
-      <input
-        ref={inputRef}
-        id="source-packet-upload"
-        className="sr-only"
-        type="file"
-        accept=".pdf,.csv,.png,.jpg,.jpeg"
-        onChange={(event) => {
-          const file = event.target.files?.[0]
-          if (file) onImport(file)
-          event.currentTarget.value = ''
-        }}
-      />
       {importNotice && (
         <p className="import-notice" role="status">
           <Icon name="check" size={14} />
@@ -527,6 +572,9 @@ function ReconciliationPanel({
   onEvidence: (evidence: EvidenceRef) => void
   onRetry: () => void
 }) {
+  const semanticMapping = workspace.comparisons.find(
+    (comparison) => comparison.matchMethod === 'semantic_suggestion',
+  )
   return (
     <section className="panel reconcile-panel" aria-labelledby="reconciliation-heading">
       <div className="panel__header panel__header--reconcile">
@@ -537,6 +585,44 @@ function ReconciliationPanel({
         <StatusBadge status={workspace.status} />
       </div>
       <StatusBanner workspace={workspace} onRetry={onRetry} />
+
+      {workspace.scenarioId === 'semantic-match' && (
+        <div
+          className={classNames(
+            'semantic-review',
+            semanticMapping ? 'semantic-review--proposed' : 'semantic-review--escalated',
+          )}
+          role="status"
+        >
+          <div className="semantic-review__icon" aria-hidden="true">
+            <Icon name={semanticMapping ? 'check' : 'warning'} size={16} />
+          </div>
+          <div>
+            <strong>
+              {semanticMapping ? 'AI-proposed mapping' : 'Semantic mapping requires escalation'}
+            </strong>
+            {semanticMapping ? (
+              <p>
+                {semanticMapping.description} · confidence{' '}
+                {semanticMapping.confidence ?? 'not provided'} · deterministic verification{' '}
+                {semanticMapping.verification ?? 'not run'}.
+                {semanticMapping.evidence && (
+                  <>
+                    {' '}
+                    <EvidenceButton evidence={semanticMapping.evidence} onOpen={onEvidence} />
+                  </>
+                )}
+              </p>
+            ) : (
+              <p>
+                Offline mode does not infer a mapping from wording alone. Select the provider mode
+                to request a bounded suggestion, then verify it against quantity, price, and source
+                evidence.
+              </p>
+            )}
+          </div>
+        </div>
+      )}
 
       <div className="reconcile-overview">
         <div className="overview-block">
@@ -712,14 +798,28 @@ function DraftSummary({ workspace }: { workspace: WorkspaceView }) {
 
 function AgentRunPanel({
   workspace,
+  providerMode,
+  apiAvailable,
   onTrace,
   onRetry,
 }: {
   workspace: WorkspaceView
+  providerMode: ProviderMode
+  apiAvailable: boolean
   onTrace: (trace: TraceEventView) => void
   onRetry: () => void
 }) {
-  const providerSelected = workspace.providerLabel.toLowerCase().includes('provider')
+  const providerSelected = providerMode === 'provider'
+  const providerEvidence = workspace.providerCallObserved
+    ? `Provider result observed · ${workspace.providerCalls} call${workspace.providerCalls === 1 ? '' : 's'}`
+    : 'No provider result observed for this run'
+  const providerReadiness = !apiAvailable
+    ? 'Provider configuration unavailable: desktop bridge not present'
+    : workspace.providerCallObserved
+      ? 'Provider configuration evidenced by this run'
+      : 'Provider configuration not evidenced by workspace or trace'
+  const deterministicScenario =
+    workspace.scenarioId === 'clean-match' || workspace.scenarioId === 'price-mismatch'
   return (
     <section className="panel agent-panel" aria-labelledby="agent-run-heading">
       <div className="panel__header">
@@ -739,12 +839,35 @@ function AgentRunPanel({
         <div>
           <strong>{workspace.providerLabel}</strong>
           <p>
-            {providerSelected
-              ? 'Provider mode is explicitly labeled; only bounded document excerpts would go to DeepSeek. Payloads and auth headers never appear in this UI.'
-              : 'Document excerpts are not sent to DeepSeek in offline mode. Provider payloads and auth headers never appear in this UI.'}
+            {deterministicScenario
+              ? 'AI not needed for this scenario. Deterministic controls compare the typed source facts; no provider call is expected.'
+              : providerSelected
+                ? `DeepSeek provider mode is selected. Bounded document excerpts may leave this device when the configured bridge runs. ${providerEvidence}; payloads and auth headers never appear in this UI.`
+                : 'Offline mode is selected. Document excerpts are not sent to DeepSeek; the local path may escalate when semantic mapping is required.'}
           </p>
+          <small className="provider-readiness" role="status">
+            {apiAvailable
+              ? 'Desktop bridge available'
+              : 'Desktop bridge unavailable in this browser'}{' '}
+            · {providerReadiness} · {providerEvidence}
+          </small>
         </div>
       </div>
+      {workspace.scenarioId === 'semantic-match' && (
+        <div
+          className={classNames(
+            'semantic-run-note',
+            providerSelected && 'semantic-run-note--provider',
+          )}
+        >
+          <Icon name={providerSelected ? 'check' : 'warning'} size={15} />
+          <span>
+            {providerSelected
+              ? 'Provider-assisted mapping is allowed; deterministic quantity, price, and evidence checks still decide the match.'
+              : 'Offline semantic mapping is intentionally escalated. No mapping is inferred without a provider suggestion.'}
+          </span>
+        </div>
+      )}
       {(workspace.status === 'offline' || workspace.status === 'rate-limited') && (
         <div className="agent-alert">
           <Icon name="warning" size={15} />
@@ -766,29 +889,45 @@ function AgentRunPanel({
         <span className="overview-label">Safe next action</span>
         <p>{workspace.safeNextAction}</p>
       </div>
-      {workspace.evaluation && (
-        <details className="evaluation-details">
-          <summary>
-            <span>Evaluation snapshot</span>
-            <Icon name="chevron-down" size={14} />
-          </summary>
-          <dl>
-            <div>
-              <dt>Groundedness</dt>
-              <dd>{workspace.evaluation.groundedness}</dd>
-            </div>
-            <div>
-              <dt>Policy compliance</dt>
-              <dd>{workspace.evaluation.policyCompliance}</dd>
-            </div>
-            <div>
-              <dt>Coverage</dt>
-              <dd>{workspace.evaluation.extractionCoverage}</dd>
-            </div>
-          </dl>
-          <small>{workspace.evaluation.note}</small>
-        </details>
-      )}
+      <details className="evaluation-details">
+        <summary>
+          <span>
+            Evaluation evidence
+            {!workspace.evaluation && ' · Not measured for this run'}
+          </span>
+          <Icon name="chevron-down" size={14} />
+        </summary>
+        {workspace.evaluation ? (
+          <>
+            <p className="evaluation-summary">
+              {workspace.evaluation.sampleSize} observed sample
+              {workspace.evaluation.sampleSize === 1 ? '' : 's'} ·{' '}
+              {workspace.evaluation.evaluationId}
+            </p>
+            <dl>
+              {workspace.evaluation.metrics.map((metric) => (
+                <div key={metric.metric}>
+                  <dt>{metric.label}</dt>
+                  <dd>
+                    {metric.value} <small>{metric.unit}</small>
+                  </dd>
+                  <small>
+                    {metric.observed ? 'Observed' : 'Not observed'} · n={metric.sampleSize}
+                  </small>
+                </div>
+              ))}
+            </dl>
+            <small>
+              Generated {workspace.evaluation.generatedAt} · {workspace.evaluation.modelCalls} model
+              call
+              {workspace.evaluation.modelCalls === 1 ? '' : 's'} · {workspace.evaluation.retries}{' '}
+              retr{workspace.evaluation.retries === 1 ? 'y' : 'ies'}
+            </small>
+          </>
+        ) : (
+          <p className="evaluation-empty">Not measured for this run.</p>
+        )}
+      </details>
       <div className="agent-panel__footer">
         <Icon name="lock" size={13} /> Trace details are progressive disclosure; sensitive payloads
         are redacted.
@@ -1127,9 +1266,20 @@ export function SupplierOpsApp({ api, initialScenarioId }: SupplierOpsAppProps) 
   }, [theme])
 
   const workspace = state.workspace
-  const onImport = (file: File) => {
-    setImportNotice(`${file.name} selected · waiting for local parse`)
-    window.setTimeout(() => setImportNotice(undefined), 5000)
+  const onImport = () => {
+    if (!state.apiAvailable) {
+      setImportNotice(
+        'Import is available in the desktop app; this browser preview has no chooser bridge.',
+      )
+      return
+    }
+    setImportNotice('Opening the desktop source chooser…')
+    void state.importSourcePacket().then(() => {
+      setImportNotice(
+        'Desktop chooser request completed; only an accepted packet updates this workspace.',
+      )
+      window.setTimeout(() => setImportNotice(undefined), 5000)
+    })
   }
   const onApprove = () => {
     if (workspace.draft && workspace.policy.canApprove && !workspace.isPromptInjection)
@@ -1147,6 +1297,10 @@ export function SupplierOpsApp({ api, initialScenarioId }: SupplierOpsAppProps) 
           workspace={workspace}
           scenarioId={state.scenarioId}
           apiAvailable={state.apiAvailable}
+          providerMode={state.providerMode}
+          onProviderMode={state.setProviderMode}
+          onRun={() => void state.runScenario()}
+          isRunning={state.isLoading || state.isMutating}
           onScenario={state.setScenario}
           onReplay={() => void state.replay()}
           onSave={() => void state.saveRegression()}
@@ -1182,6 +1336,8 @@ export function SupplierOpsApp({ api, initialScenarioId }: SupplierOpsAppProps) 
             />
             <AgentRunPanel
               workspace={workspace}
+              providerMode={state.providerMode}
+              apiAvailable={state.apiAvailable}
               onTrace={() => setTraceOpen(true)}
               onRetry={() => void state.retry()}
             />

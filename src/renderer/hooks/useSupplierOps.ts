@@ -1,17 +1,11 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ApiContract } from '../../shared/api'
-import type { CaseWorkspace } from '../../shared/domain'
-
-export const SCENARIO_IDS = [
-  'clean-match',
-  'price-mismatch',
-  'semantic-match',
-  'prompt-injection',
-  'api-outage',
-  'invalid-model-output',
-] as const
-
-export type ScenarioId = (typeof SCENARIO_IDS)[number]
+import {
+  SCENARIO_IDS,
+  type CaseWorkspace,
+  type ProviderMode,
+  type ScenarioId,
+} from '../../shared/domain'
 
 export const SCENARIO_META: Record<ScenarioId, { label: string; shortLabel: string }> = {
   'clean-match': { label: 'Clean match', shortLabel: 'Clean match' },
@@ -81,6 +75,9 @@ export interface LineComparisonView {
   expectedValue: string
   variance: string
   status: 'match' | 'review' | 'blocked' | 'unknown'
+  matchMethod?: string
+  verification?: string
+  confidence?: string
   evidence?: EvidenceRef
 }
 
@@ -128,10 +125,22 @@ export interface ExecutionView {
 }
 
 export interface EvaluationView {
-  groundedness: string
-  policyCompliance: string
-  extractionCoverage: string
-  note: string
+  evaluationId: string
+  sampleSize: number
+  metrics: EvaluationMetricView[]
+  latencyMs: number | null
+  retries: number
+  modelCalls: number
+  generatedAt: string
+}
+
+export interface EvaluationMetricView {
+  metric: string
+  label: string
+  value: string
+  unit: string
+  sampleSize: number
+  observed: boolean
 }
 
 export interface WorkspaceView {
@@ -155,6 +164,9 @@ export interface WorkspaceView {
   approval: ApprovalView
   execution: ExecutionView
   evaluation?: EvaluationView
+  providerMode: ProviderMode
+  providerCallObserved: boolean
+  providerCalls: number
   provider: 'offline' | 'local' | 'redacted-provider'
   providerLabel: string
   isPromptInjection: boolean
@@ -179,11 +191,15 @@ export interface UseSupplierOpsOptions {
 export interface SupplierOpsState {
   apiAvailable: boolean
   scenarioId: ScenarioId
+  providerMode: ProviderMode
   workspace: WorkspaceView
   isLoading: boolean
   isMutating: boolean
   error?: string
   setScenario: (scenarioId: ScenarioId) => void
+  setProviderMode: (mode: ProviderMode) => void
+  runScenario: () => Promise<void>
+  importSourcePacket: () => Promise<void>
   requestCorrection: () => Promise<void>
   createCorrectedDraft: () => Promise<void>
   approve: () => Promise<void>
@@ -220,6 +236,11 @@ const numberValue = (value: unknown, fallback = 0): number => {
   }
   return fallback
 }
+
+const defaultProviderMode = (): ProviderMode => 'offline'
+
+const providerModeFor = (scenarioId: ScenarioId, requested: ProviderMode): ProviderMode =>
+  scenarioId === 'prompt-injection' ? 'offline' : requested
 
 const arrayValue = (value: unknown): unknown[] => (Array.isArray(value) ? value : [])
 
@@ -308,7 +329,7 @@ const evidenceFrom = (value: unknown, index: number, defaultFile: string): Evide
     fileName,
     page,
     quote: stringValue(
-      first(source, ['quote', 'excerpt', 'text', 'content']),
+      first(source, ['quote', 'excerpt', 'text', 'content', 'locator']),
       'Source excerpt is available in the evidence drawer.',
     ),
     kind: ['extracted', 'policy', 'trace'].includes(stringValue(source.kind))
@@ -334,11 +355,19 @@ const evidenceFromId = (
   return undefined
 }
 
+/** Format an explicitly minor-unit amount. Never infer units from magnitude. */
 const formatMoney = (value: unknown, currency = 'USD'): string => {
   if (value === null || value === undefined || value === '') return '—'
-  const numeric = numberValue(value, Number.NaN)
+  const numeric =
+    typeof value === 'number'
+      ? Number.isSafeInteger(value)
+        ? value
+        : Number.NaN
+      : typeof value === 'string' && /^-?\d+$/u.test(value.trim())
+        ? Number(value)
+        : Number.NaN
   if (!Number.isFinite(numeric)) return stringValue(value, '—')
-  const major = Math.abs(numeric) >= 100 ? numeric / 100 : numeric
+  const major = numeric / 100
   try {
     return new Intl.NumberFormat('en-US', {
       style: 'currency',
@@ -449,21 +478,18 @@ const makeFallback = (scenarioId: ScenarioId): WorkspaceView => {
         id: 'supplier',
         label: 'Supplier',
         value: 'Northwind Industrial Supply',
-        confidence: '99.8%',
       },
       {
         id: 'invoice',
         label: 'Invoice number',
         value: 'INV-24018',
-        confidence: '99.9%',
         evidence: invoiceEvidence,
       },
-      { id: 'currency', label: 'Currency', value: 'USD', confidence: '99.9%' },
+      { id: 'currency', label: 'Currency', value: 'USD' },
       {
         id: 'terms',
         label: 'Payment terms',
         value: 'Net 30',
-        confidence: '98.7%',
         evidence: invoiceEvidence,
       },
     ],
@@ -526,7 +552,7 @@ const makeFallback = (scenarioId: ScenarioId): WorkspaceView => {
         time: '09:41:21',
         kind: 'model',
         title: 'Fields extracted',
-        summary: '18 fields · 99.2% weighted confidence',
+        summary: '18 fields · local extraction path',
         detail:
           'Document excerpts were handled by the configured offline path; no provider request was made.',
         safeDetail: 'Provider payloads and credentials are redacted from the trace.',
@@ -544,12 +570,10 @@ const makeFallback = (scenarioId: ScenarioId): WorkspaceView => {
     ],
     approval: { status: 'not-requested' },
     execution: { status: 'not-run', adapter: 'local/mock' },
-    evaluation: {
-      groundedness: '0.98',
-      policyCompliance: '1.00',
-      extractionCoverage: '0.96',
-      note: 'Local regression baseline · redacted fixture',
-    },
+    evaluation: undefined,
+    providerMode: defaultProviderMode(),
+    providerCallObserved: false,
+    providerCalls: 0,
     provider: 'offline',
     providerLabel: 'Offline AI path',
     isPromptInjection: false,
@@ -737,6 +761,9 @@ const normalizeStatus = (value: unknown, scenarioId: ScenarioId): WorkspaceStatu
 
 const normalizeWorkspace = (input: unknown, fallbackScenario: ScenarioId): WorkspaceView => {
   const root = asRecord(input)
+  if (root.caseMetadata && root.workflow && Array.isArray(root.sourcePacket)) {
+    return normalizeCaseWorkspace(input, fallbackScenario)
+  }
   const caseRecord = asRecord(first(root, ['case', 'caseMetadata', 'metadata'], {}))
   const scenarioId = scenarioFrom(
     first(
@@ -1106,6 +1133,8 @@ const normalizeWorkspace = (input: unknown, fallbackScenario: ScenarioId): Works
  */
 const normalizeCaseWorkspace = (input: unknown, fallbackScenario: ScenarioId): WorkspaceView => {
   const root = asRecord(input)
+  const hasTypedWorkspace =
+    Boolean(root.caseMetadata) && Boolean(root.workflow) && Array.isArray(root.sourcePacket)
   const metadata = asRecord(root.caseMetadata)
   const workflow = asRecord(root.workflow)
   const sourceEntries = arrayValue(root.sourcePacket)
@@ -1117,18 +1146,22 @@ const normalizeCaseWorkspace = (input: unknown, fallbackScenario: ScenarioId): W
   const failure = asRecord(root.failure)
   const scenarioId = scenarioFrom(first(metadata, ['scenarioId']), fallbackScenario)
   const fallback = FALLBACK_WORKSPACES[scenarioId]
-  const currency = stringValue(
-    first(invoice, ['currency'], first(purchaseOrder, ['currency'], 'USD')),
-    'USD',
+  const currencyValue = first(
+    invoice,
+    ['currency'],
+    first(purchaseOrder, ['currency'], hasTypedWorkspace ? null : 'USD'),
   )
+  const currency = stringValue(currencyValue, hasTypedWorkspace ? '—' : 'USD')
   const supplier = stringValue(
     first(metadata, ['supplierName'], first(invoice, ['supplierName'], fallback.supplier)),
     fallback.supplier,
   )
-  const caseNumber = stringValue(
-    first(metadata, ['invoiceNumber'], first(invoice, ['invoiceNumber'], fallback.caseNumber)),
-    fallback.caseNumber,
+  const caseNumberValue = first(
+    metadata,
+    ['invoiceNumber'],
+    first(invoice, ['invoiceNumber'], hasTypedWorkspace ? null : fallback.caseNumber),
   )
+  const caseNumber = stringValue(caseNumberValue, hasTypedWorkspace ? '—' : fallback.caseNumber)
   const statusCandidate = stringValue(first(workflow, ['status']), 'ready')
   const providerFailureKind = stringValue(first(failure, ['kind'])).toLowerCase()
   const status = providerFailureKind.includes('invalid')
@@ -1156,7 +1189,9 @@ const normalizeCaseWorkspace = (input: unknown, fallbackScenario: ScenarioId): W
           evidence,
         }
       })
-    : fallback.sourcePacket.files
+    : hasTypedWorkspace
+      ? []
+      : fallback.sourcePacket.files
   const allEvidence = files.flatMap((file) => file.evidence)
   const evidenceById = new Map(allEvidence.map((evidence) => [evidence.id, evidence]))
   const resolveEvidence = (value: unknown, index: number): EvidenceRef | undefined => {
@@ -1232,6 +1267,12 @@ const normalizeCaseWorkspace = (input: unknown, fallbackScenario: ScenarioId): W
           ),
           variance: formatPercent(priceDelta, expectedUnitPrice),
           status: comparisonStatus,
+          matchMethod: stringValue(first(comparison, ['matchMethod']), 'unmatched'),
+          verification: stringValue(first(comparison, ['verification']), 'not_run'),
+          confidence:
+            first(comparison, ['confidence']) === ''
+              ? undefined
+              : `${stringValue(first(comparison, ['confidence']))}%`,
           evidence: resolveEvidence(first(comparison, ['evidenceIds']), index),
         }
       })
@@ -1259,42 +1300,43 @@ const normalizeCaseWorkspace = (input: unknown, fallbackScenario: ScenarioId): W
     'supplier',
     'Supplier',
     supplier,
-    '99.8%',
+    '',
     resolveEvidence(first(invoice, ['evidenceIds']), 0),
   )
   pushFact(
     'invoice-number',
     'Invoice number',
-    caseNumber,
-    '99.9%',
+    caseNumberValue,
+    '',
     resolveEvidence(first(invoice, ['evidenceIds']), 0),
   )
   pushFact(
     'currency',
     'Currency',
-    currency,
-    '99.9%',
+    currencyValue,
+    '',
     resolveEvidence(first(invoice, ['evidenceIds']), 0),
   )
   pushFact(
     'issue-date',
     'Issue date',
     first(invoice, ['issueDate']),
-    '99.0%',
+    '',
     resolveEvidence(first(invoice, ['evidenceIds']), 0),
   )
   pushFact(
     'purchase-order',
     'Purchase order',
     first(purchaseOrder, ['purchaseOrderNumber']),
-    '99.6%',
+    '',
     resolveEvidence(first(purchaseOrder, ['evidenceIds']), 1),
   )
+  const toleranceBps = first(contract, ['priceToleranceBps'], null)
   pushFact(
     'contract-tolerance',
     'Price tolerance',
-    `${numberValue(first(contract, ['priceToleranceBps']), 0) / 100}%`,
-    '100%',
+    toleranceBps === null ? null : `${numberValue(toleranceBps) / 100}%`,
+    '',
     resolveEvidence(first(contract, ['evidenceIds']), 2),
   )
 
@@ -1335,6 +1377,16 @@ const normalizeCaseWorkspace = (input: unknown, fallbackScenario: ScenarioId): W
           : undefined,
       status: blocked ? 'blocked' : attention ? 'attention' : 'complete',
     }
+  })
+  const providerCallObserved = arrayValue(root.traceEvents).some((rawEvent) => {
+    const event = asRecord(rawEvent)
+    const type = stringValue(first(event, ['type']))
+    return (
+      stringValue(first(event, ['actor'])) === 'provider' ||
+      type === 'provider_failure' ||
+      type === 'provider_replayed' ||
+      type === 'model_output_rejected'
+    )
   })
 
   const policyOutcome = stringValue(first(policyDecision, ['outcome']), 'escalate')
@@ -1391,24 +1443,29 @@ const normalizeCaseWorkspace = (input: unknown, fallbackScenario: ScenarioId): W
       }
     : { status: 'not-run', adapter: 'local/mock' }
   const evaluationRecord = asRecord(root.evaluation)
-  const metrics = arrayValue(evaluationRecord.metrics).map(asRecord)
-  const metricValue = (needle: string) => {
-    const metric = metrics.find((candidate) =>
-      stringValue(first(candidate, ['metric', 'label']))
-        .toLowerCase()
-        .includes(needle),
-    )
-    return metric ? stringValue(first(metric, ['value'])) : '—'
-  }
+  const evaluationMetrics = arrayValue(evaluationRecord.metrics).map(asRecord)
   const evaluation: EvaluationView | undefined =
     Object.keys(evaluationRecord).length > 0
       ? {
-          groundedness: metricValue('ground'),
-          policyCompliance: metricValue('polic'),
-          extractionCoverage: metricValue('cover'),
-          note: 'Shared evaluation snapshot',
+          evaluationId: stringValue(first(evaluationRecord, ['evaluationId']), 'evaluation'),
+          sampleSize: numberValue(first(evaluationRecord, ['sampleSize']), 0),
+          metrics: evaluationMetrics.map((metric, index) => ({
+            metric: stringValue(first(metric, ['metric']), `metric-${index + 1}`),
+            label: stringValue(first(metric, ['label']), 'Measured metric'),
+            value: stringValue(first(metric, ['value']), '—'),
+            unit: stringValue(first(metric, ['unit']), 'count'),
+            sampleSize: numberValue(first(metric, ['sampleSize']), 0),
+            observed: Boolean(first(metric, ['observed'], false)),
+          })),
+          latencyMs:
+            first(evaluationRecord, ['latencyMs']) === null
+              ? null
+              : numberValue(first(evaluationRecord, ['latencyMs']), 0),
+          retries: numberValue(first(evaluationRecord, ['retries']), 0),
+          modelCalls: numberValue(first(evaluationRecord, ['modelCalls']), 0),
+          generatedAt: stringValue(first(evaluationRecord, ['generatedAt']), '—'),
         }
-      : fallback.evaluation
+      : undefined
   const providerLabel =
     status === 'offline'
       ? 'Offline fallback · provider unavailable'
@@ -1416,7 +1473,11 @@ const normalizeCaseWorkspace = (input: unknown, fallbackScenario: ScenarioId): W
         ? 'Provider rate limited · replayable'
         : status === 'invalid-output'
           ? 'Provider output quarantined'
-          : 'Offline AI path'
+          : scenarioId === 'semantic-match'
+            ? 'Offline semantic escalation'
+            : scenarioId === 'clean-match' || scenarioId === 'price-mismatch'
+              ? 'AI not needed · deterministic path'
+              : 'Offline AI path'
   const happened = isPromptInjection
     ? 'An instruction-like source entry was quarantined as untrusted document data. It did not execute.'
     : stringValue(first(policyDecision, ['rationale']), fallback.happened)
@@ -1426,18 +1487,22 @@ const normalizeCaseWorkspace = (input: unknown, fallbackScenario: ScenarioId): W
           .map((item) => stringValue(first(item, ['message'])))
           .filter(Boolean)
           .join(' ')
-      : fallback.why
+      : hasTypedWorkspace
+        ? 'No discrepancy is recorded yet; parsing is required before reconciliation.'
+        : fallback.why
   const safeNextAction = isPromptInjection
     ? 'Keep the case blocked. Inspect the trace and obtain a clean supplier document before continuing.'
-    : status === 'offline' || status === 'rate-limited' || status === 'invalid-output'
-      ? 'Review the retained local evidence or retry the provider check. Approval and submission remain unavailable.'
-      : draft
-        ? approval.status === 'approved'
-          ? 'Submission is now enabled as a separate local/mock action.'
-          : 'Review the corrected draft, then approve explicitly before the local mock adapter is run.'
-        : normalizedPolicy.canCreateDraft
-          ? 'Request a corrected invoice, then create a corrected draft for separate approval.'
-          : 'Review the grounded evidence and decide the next safe action.'
+    : hasTypedWorkspace && invoiceLines.length === 0 && poLines.length === 0
+      ? 'Parse the imported source packet before reconciliation or approval.'
+      : status === 'offline' || status === 'rate-limited' || status === 'invalid-output'
+        ? 'Review the retained local evidence or retry the provider check. Approval and submission remain unavailable.'
+        : draft
+          ? approval.status === 'approved'
+            ? 'Submission is now enabled as a separate local/mock action.'
+            : 'Review the corrected draft, then approve explicitly before the local mock adapter is run.'
+          : normalizedPolicy.canCreateDraft
+            ? 'Request a corrected invoice, then create a corrected draft for separate approval.'
+            : 'Review the grounded evidence and decide the next safe action.'
 
   return {
     ...fallback,
@@ -1453,7 +1518,9 @@ const normalizeCaseWorkspace = (input: unknown, fallbackScenario: ScenarioId): W
     phase,
     headline: isPromptInjection
       ? 'Processing stopped: an embedded instruction was detected in the source packet.'
-      : fallback.headline,
+      : hasTypedWorkspace && invoiceLines.length === 0 && poLines.length === 0
+        ? 'Source packet loaded; extraction and reconciliation are pending.'
+        : fallback.headline,
     happened,
     why,
     safeNextAction,
@@ -1462,8 +1529,8 @@ const normalizeCaseWorkspace = (input: unknown, fallbackScenario: ScenarioId): W
       supplier,
       invoiceNumber: caseNumber,
       purchaseOrder: stringValue(
-        first(purchaseOrder, ['purchaseOrderNumber']),
-        fallback.sourcePacket.purchaseOrder,
+        first(purchaseOrder, ['purchaseOrderNumber'], hasTypedWorkspace ? null : undefined),
+        hasTypedWorkspace ? '—' : fallback.sourcePacket.purchaseOrder,
       ),
       receivedAt: stringValue(first(metadata, ['openedAt']), fallback.sourcePacket.receivedAt),
       pageCount: files.reduce((total, file) => total + file.pages, 0),
@@ -1472,14 +1539,18 @@ const normalizeCaseWorkspace = (input: unknown, fallbackScenario: ScenarioId): W
         fallback.sourcePacket.packetHash,
       ),
     },
-    extractedFacts: facts.length > 0 ? facts : fallback.extractedFacts,
-    comparisons: comparisons.length > 0 ? comparisons : fallback.comparisons,
+    extractedFacts: facts.length > 0 ? facts : hasTypedWorkspace ? [] : fallback.extractedFacts,
+    comparisons:
+      comparisons.length > 0 ? comparisons : hasTypedWorkspace ? [] : fallback.comparisons,
     policy: normalizedPolicy,
-    trace: trace.length > 0 ? trace : fallback.trace,
+    trace: trace.length > 0 ? trace : hasTypedWorkspace ? [] : fallback.trace,
     draft,
     approval,
     execution,
     evaluation,
+    providerMode: defaultProviderMode(),
+    providerCallObserved,
+    providerCalls: providerCallObserved ? 1 : 0,
     provider:
       status === 'offline' || status === 'rate-limited' || status === 'invalid-output'
         ? 'redacted-provider'
@@ -1521,54 +1592,153 @@ const invoke = async (
 ): Promise<unknown> => {
   const method = findFunction(api, names)
   if (!method) return undefined
-  return method(payload)
+  try {
+    const result = await method(payload)
+    const envelope = readIpcErrorEnvelope(result)
+    if (envelope) throw new SupplierOpsIpcError(envelope)
+    return result
+  } catch (caughtError) {
+    const envelope = readIpcErrorEnvelope(caughtError)
+    if (envelope) throw new SupplierOpsIpcError(envelope)
+    throw caughtError
+  }
+}
+
+interface IpcErrorEnvelope {
+  name: string
+  message: string
+  failureId?: string
+}
+
+class SupplierOpsIpcError extends Error {
+  readonly failureId?: string
+
+  constructor(envelope: IpcErrorEnvelope) {
+    super(envelope.message)
+    this.name = envelope.name
+    this.failureId = envelope.failureId
+  }
+}
+
+const readIpcErrorEnvelope = (value: unknown): IpcErrorEnvelope | undefined => {
+  const root = asRecord(value)
+  const error = asRecord(root.error)
+  const name = stringValue(first(error, ['name']), '')
+  const message = stringValue(first(error, ['message']), '')
+  if (!name || !message) return undefined
+  const failureId = stringValue(first(error, ['failureId']), '') || undefined
+  return { name, message, failureId }
+}
+
+const redactedMessage = (value: unknown): string => {
+  const message = value instanceof Error ? value.message : stringValue(value)
+  if (!message) return 'The local operation could not be completed.'
+  return message
+    .replace(/(?:authorization|api[\s_-]*key|token|secret)\s*[:=]\s*[^\s,;]+/giu, '[redacted]')
+    .replace(/\b[A-Za-z]{2,4}-[A-Za-z0-9_-]{16,}\b/gu, '[redacted]')
+    .replace(/\s+/gu, ' ')
+    .trim()
+    .slice(0, 240)
+}
+
+const errorDetails = (value: unknown): { message: string; failureId?: string } => {
+  const envelope = value instanceof SupplierOpsIpcError ? undefined : readIpcErrorEnvelope(value)
+  const message = redactedMessage(envelope?.message ?? value)
+  const failureId = value instanceof SupplierOpsIpcError ? value.failureId : envelope?.failureId
+  return { message, failureId }
+}
+
+const errorMessageWithFailureId = (details: { message: string; failureId?: string }): string =>
+  details.failureId ? `${details.message} · Failure ID: ${details.failureId}` : details.message
+
+const providerSelectionLabelFor = (scenarioId: ScenarioId, mode: ProviderMode): string => {
+  if (scenarioId === 'prompt-injection') return 'Blocked · provider call not permitted'
+  if (scenarioId === 'clean-match' || scenarioId === 'price-mismatch') {
+    return 'AI not needed · deterministic path'
+  }
+  return mode === 'provider'
+    ? 'DeepSeek provider selected · not run'
+    : 'Offline mode selected · not run'
+}
+
+const providerErrorLabelFor = (scenarioId: ScenarioId, mode: ProviderMode): string =>
+  mode === 'provider' && scenarioId !== 'prompt-injection'
+    ? 'DeepSeek provider error · result unavailable'
+    : providerSelectionLabelFor(scenarioId, mode)
+
+const providerLabelFor = (
+  scenarioId: ScenarioId,
+  mode: ProviderMode,
+  workspace: WorkspaceView,
+  providerCallObserved: boolean,
+): string => {
+  if (scenarioId === 'prompt-injection') return 'Blocked · provider call not permitted'
+  if (scenarioId === 'clean-match' || scenarioId === 'price-mismatch') {
+    return 'AI not needed · deterministic path'
+  }
+  if (mode === 'offline') {
+    return scenarioId === 'semantic-match'
+      ? 'Offline semantic escalation'
+      : 'Offline path · no provider call'
+  }
+  if (!providerCallObserved) return 'DeepSeek provider selected · no result observed'
+  if (workspace.status === 'rate-limited') return 'DeepSeek provider rate limited · replayable'
+  if (workspace.status === 'invalid-output') return 'DeepSeek output quarantined'
+  if (workspace.status === 'offline')
+    return 'DeepSeek provider unavailable · local evidence retained'
+  return 'DeepSeek provider result · redacted'
 }
 
 const workspaceFromResult = (
   result: unknown,
   scenarioId: ScenarioId,
+  requestedMode?: ProviderMode,
 ): WorkspaceView | undefined => {
   if (!result || typeof result !== 'object') return undefined
+  const envelope = readIpcErrorEnvelope(result)
+  if (envelope) throw new SupplierOpsIpcError(envelope)
   const record = asRecord(result)
   const candidate = first(record, ['workspace', 'caseWorkspace', 'data'], result)
   if (!candidate || typeof candidate !== 'object') return undefined
-  return normalizeCaseWorkspace(candidate, scenarioId)
+  const workspace = normalizeCaseWorkspace(candidate, scenarioId)
+  const mode = providerModeFor(workspace.scenarioId, requestedMode ?? workspace.providerMode)
+  const providerCalls = numberValue(first(record, ['providerCalls']), workspace.providerCalls)
+  const providerCallObserved = workspace.providerCallObserved || providerCalls > 0
+  return {
+    ...workspace,
+    providerMode: mode,
+    providerCalls,
+    providerCallObserved,
+    providerLabel: providerLabelFor(workspace.scenarioId, mode, workspace, providerCallObserved),
+  }
 }
 
 const callWorkspace = async (
   api: ApiContract | undefined,
   scenarioId: ScenarioId,
+  requestedMode: ProviderMode,
 ): Promise<WorkspaceView | undefined> => {
   if (!api) return undefined
-  const mode =
-    scenarioId === 'semantic-match' ||
-    scenarioId === 'api-outage' ||
-    scenarioId === 'invalid-model-output'
-      ? 'provider'
-      : 'offline'
+  const mode = providerModeFor(scenarioId, requestedMode)
   try {
-    // Reconcile through the same offline contract used by the desktop app so
-    // the six demos show real shared-workspace projections, not UI-only state.
+    // Reconcile through the same contract used by the desktop app. The mode is
+    // explicit so the UI never claims a provider call that the operator did
+    // not select (or that the prompt-injection guard should prohibit).
     const runResult = await invoke(api, ['runScenario'], {
       scenarioId,
       mode,
-      providerResult: null,
-      modelOutput: null,
-      idempotencyKey: `renderer:run:${scenarioId}:offline`,
     })
-    const runWorkspace = workspaceFromResult(runResult, scenarioId)
+    const runWorkspace = workspaceFromResult(runResult, scenarioId, mode)
     if (runWorkspace) {
-      return {
-        ...runWorkspace,
-        providerLabel: mode === 'provider' ? 'Provider path · redacted' : 'Offline AI path',
-      }
+      return runWorkspace
     }
-  } catch {
+  } catch (caughtError) {
+    if (caughtError instanceof SupplierOpsIpcError) throw caughtError
     // Loading a source snapshot remains a safe fallback when an adapter does
     // not implement scenario execution (for example, a focused test double).
   }
   const loaded = await invoke(api, ['loadScenario'], { scenarioId })
-  return workspaceFromResult(loaded, scenarioId)
+  return workspaceFromResult(loaded, scenarioId, mode)
 }
 
 const withLocalDraft = (workspace: WorkspaceView, result?: unknown): WorkspaceView => {
@@ -1680,6 +1850,7 @@ export const useSupplierOps = (options: UseSupplierOpsOptions = {}): SupplierOps
   const api = options.api ?? getDefaultApi()
   const initialScenarioId = options.initialScenarioId ?? 'price-mismatch'
   const [scenarioId, setScenarioIdState] = useState<ScenarioId>(initialScenarioId)
+  const [providerMode, setProviderModeState] = useState<ProviderMode>(defaultProviderMode())
   const [workspace, setWorkspace] = useState<WorkspaceView>(
     () => FALLBACK_WORKSPACES[initialScenarioId],
   )
@@ -1689,40 +1860,60 @@ export const useSupplierOps = (options: UseSupplierOpsOptions = {}): SupplierOps
   const [isLoading, setIsLoading] = useState(Boolean(api))
   const [isMutating, setIsMutating] = useState(false)
   const [error, setError] = useState<string | undefined>()
+  const requestSequence = useRef(0)
 
   const hydrate = useCallback(
-    async (nextScenarioId: ScenarioId) => {
+    async (nextScenarioId: ScenarioId, requestedMode: ProviderMode = defaultProviderMode()) => {
+      const requestId = ++requestSequence.current
+      const mode = providerModeFor(nextScenarioId, requestedMode)
       if (!api) {
         // Browser previews and unit tests intentionally run without preload.
         // Keep that local fallback synchronous so there is no phantom loading
         // transition after the first paint.
         setError(undefined)
-        setWorkspace(FALLBACK_WORKSPACES[nextScenarioId])
+        setWorkspace({
+          ...FALLBACK_WORKSPACES[nextScenarioId],
+          providerMode: mode,
+          providerCallObserved: false,
+          providerCalls: 0,
+          providerLabel: providerSelectionLabelFor(nextScenarioId, mode),
+        })
         setIsLoading(false)
         return
       }
       setIsLoading(true)
       setError(undefined)
       try {
-        const remoteWorkspace = await callWorkspace(api, nextScenarioId)
+        const remoteWorkspace = await callWorkspace(api, nextScenarioId, mode)
+        if (requestId !== requestSequence.current) return
         if (remoteWorkspace) {
           setWorkspace(remoteWorkspace)
         } else {
-          setWorkspace(FALLBACK_WORKSPACES[nextScenarioId])
+          setWorkspace({
+            ...FALLBACK_WORKSPACES[nextScenarioId],
+            providerMode: mode,
+            providerCallObserved: false,
+            providerCalls: 0,
+            providerLabel: providerSelectionLabelFor(nextScenarioId, mode),
+          })
         }
       } catch (caughtError) {
-        const message =
-          caughtError instanceof Error
-            ? caughtError.message
-            : 'The local workspace could not be loaded.'
+        if (requestId !== requestSequence.current) return
+        const details = errorDetails(caughtError)
+        const message = errorMessageWithFailureId(details)
         setError(message)
         setWorkspace({
           ...FALLBACK_WORKSPACES[nextScenarioId],
           status: 'error',
           errorMessage: message,
+          failureId: details.failureId,
+          providerMode: mode,
+          providerCallObserved: false,
+          providerCalls: 0,
+          providerLabel: providerErrorLabelFor(nextScenarioId, mode),
         })
       } finally {
-        setIsLoading(false)
+        if (requestId === requestSequence.current) setIsLoading(false)
       }
     },
     [api],
@@ -1733,15 +1924,39 @@ export const useSupplierOps = (options: UseSupplierOpsOptions = {}): SupplierOps
   }, [hydrate, scenarioId])
 
   const setScenario = useCallback((nextScenarioId: ScenarioId) => {
+    const nextMode = defaultProviderMode()
     setScenarioIdState(nextScenarioId)
-    setWorkspace(FALLBACK_WORKSPACES[nextScenarioId])
+    setProviderModeState(nextMode)
+    setWorkspace({ ...FALLBACK_WORKSPACES[nextScenarioId], providerMode: nextMode })
   }, [])
+
+  const setProviderMode = useCallback(
+    (nextMode: ProviderMode) => {
+      const effectiveMode = providerModeFor(scenarioId, nextMode)
+      setProviderModeState(effectiveMode)
+      setWorkspace((current) => ({
+        ...current,
+        providerMode: effectiveMode,
+        providerCallObserved: false,
+        providerCalls: 0,
+        providerLabel: providerSelectionLabelFor(scenarioId, effectiveMode),
+      }))
+    },
+    [scenarioId],
+  )
+
+  const runScenario = useCallback(
+    () => hydrate(scenarioId, providerMode),
+    [hydrate, providerMode, scenarioId],
+  )
 
   const mutate = useCallback(
     async (
       names: string[],
       localUpdate: (current: WorkspaceView, result?: unknown) => WorkspaceView,
       payload: Record<string, unknown> = {},
+      requestedMode: ProviderMode = providerMode,
+      preserveProviderEvidence = true,
     ) => {
       setIsMutating(true)
       setError(undefined)
@@ -1750,20 +1965,72 @@ export const useSupplierOps = (options: UseSupplierOpsOptions = {}): SupplierOps
         // for the selected contract method; adding cross-operation fields here
         // would make valid draft/approval/submission requests fail validation.
         const result = await invoke(api, names, payload)
-        const remoteWorkspace = workspaceFromResult(result, scenarioId)
-        if (remoteWorkspace) setWorkspace(remoteWorkspace)
-        else setWorkspace((current) => localUpdate(current, result))
+        const remoteWorkspace = workspaceFromResult(result, scenarioId, requestedMode)
+        if (remoteWorkspace) {
+          setWorkspace((current) => {
+            const providerCallObserved = preserveProviderEvidence
+              ? remoteWorkspace.providerCallObserved || current.providerCallObserved
+              : remoteWorkspace.providerCallObserved
+            const providerCalls = preserveProviderEvidence
+              ? Math.max(remoteWorkspace.providerCalls, current.providerCalls)
+              : remoteWorkspace.providerCalls
+            const mode = providerModeFor(scenarioId, requestedMode)
+            return {
+              ...remoteWorkspace,
+              providerMode: mode,
+              providerCalls,
+              providerCallObserved,
+              providerLabel: providerLabelFor(
+                remoteWorkspace.scenarioId,
+                mode,
+                remoteWorkspace,
+                providerCallObserved,
+              ),
+            }
+          })
+        } else setWorkspace((current) => localUpdate(current, result))
       } catch (caughtError) {
-        const message =
-          caughtError instanceof Error ? caughtError.message : 'The requested local action failed.'
+        const details = errorDetails(caughtError)
+        const message = errorMessageWithFailureId(details)
         setError(message)
-        setWorkspace((current) => ({ ...current, status: 'error', errorMessage: message }))
+        setWorkspace((current) => ({
+          ...current,
+          status: 'error',
+          errorMessage: message,
+          failureId: details.failureId,
+        }))
       } finally {
         setIsMutating(false)
       }
     },
-    [api, scenarioId, workspace.id],
+    [api, providerMode, scenarioId, workspace.id],
   )
+
+  const importSourcePacket = useCallback(async () => {
+    if (!api) return
+    const caseMetadata = workspace.rawWorkspace?.caseMetadata
+    if (!caseMetadata) {
+      setError('Import is waiting for a desktop case metadata snapshot.')
+      return
+    }
+    await mutate(
+      ['importSourcePacket'],
+      (current) => ({
+        ...current,
+        status: 'empty',
+        phase: 'ingest',
+        extractedFacts: [],
+        comparisons: [],
+        trace: [],
+        draft: undefined,
+        approval: { status: 'not-requested' },
+        execution: { status: 'not-run', adapter: 'local/mock' },
+      }),
+      { caseMetadata, at: operationAt() },
+      'offline',
+      false,
+    )
+  }, [api, mutate, workspace.rawWorkspace])
 
   const requestCorrection = useCallback(
     () =>
@@ -1809,22 +2076,24 @@ export const useSupplierOps = (options: UseSupplierOpsOptions = {}): SupplierOps
     [mutate, workspace],
   )
 
-  const retry = useCallback(() => hydrate(scenarioId), [hydrate, scenarioId])
+  const retry = useCallback(() => hydrate(scenarioId, 'offline'), [hydrate, scenarioId])
 
   const replay = useCallback(() => {
-    if (!workspace.failureId) return hydrate(scenarioId)
-    return mutate(['replayFailure'], (current) => ({ ...current, updatedAt: 'Just now' }), {
-      caseId: workspace.id,
-      failureId: workspace.failureId,
-      mode:
-        scenarioId === 'api-outage' || scenarioId === 'invalid-model-output'
-          ? 'provider'
-          : 'offline',
-      providerResult: null,
-      modelOutput: null,
-      idempotencyKey: operationId('replay', workspace),
-      at: operationAt(),
-    })
+    if (!workspace.failureId) return hydrate(scenarioId, 'offline')
+    return mutate(
+      ['replayFailure'],
+      (current) => ({ ...current, updatedAt: 'Just now' }),
+      {
+        caseId: workspace.id,
+        failureId: workspace.failureId,
+        mode: 'offline',
+        providerResult: null,
+        modelOutput: null,
+        idempotencyKey: operationId('replay', workspace),
+        at: operationAt(),
+      },
+      'offline',
+    )
   }, [hydrate, mutate, scenarioId, workspace])
 
   const saveRegression = useCallback(
@@ -1842,11 +2111,15 @@ export const useSupplierOps = (options: UseSupplierOpsOptions = {}): SupplierOps
     () => ({
       apiAvailable: Boolean(api),
       scenarioId,
+      providerMode,
       workspace,
       isLoading,
       isMutating,
       error,
       setScenario,
+      setProviderMode,
+      runScenario,
+      importSourcePacket,
       requestCorrection,
       createCorrectedDraft,
       approve,
@@ -1858,11 +2131,15 @@ export const useSupplierOps = (options: UseSupplierOpsOptions = {}): SupplierOps
     [
       api,
       scenarioId,
+      providerMode,
       workspace,
       isLoading,
       isMutating,
       error,
       setScenario,
+      setProviderMode,
+      runScenario,
+      importSourcePacket,
       requestCorrection,
       createCorrectedDraft,
       approve,
@@ -1875,3 +2152,5 @@ export const useSupplierOps = (options: UseSupplierOpsOptions = {}): SupplierOps
 }
 
 export { FALLBACK_WORKSPACES, normalizeWorkspace }
+export { SCENARIO_IDS } from '../../shared/domain'
+export type { ProviderMode, ScenarioId }

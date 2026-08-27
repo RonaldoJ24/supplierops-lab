@@ -293,6 +293,41 @@ button:disabled {
   pointer-events: none;
   color: var(--ink-600);
 }
+.provider-control {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+.provider-control select {
+  appearance: none;
+  min-width: 132px;
+  padding: 8px 27px 8px 10px;
+  border: 1px solid var(--teal-500);
+  border-radius: var(--radius-sm);
+  background: var(--teal-050);
+  color: var(--ink-900);
+  font-size: 12px;
+}
+.provider-control svg {
+  position: absolute;
+  right: 8px;
+  pointer-events: none;
+  color: var(--teal-700);
+}
+.provider-control--locked select {
+  border-color: var(--ink-200);
+  background: var(--ivory-100);
+  color: var(--ink-600);
+  cursor: not-allowed;
+}
+.topbar__run {
+  white-space: nowrap;
+}
+.panel__header-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
 .icon-button {
   display: inline-grid;
   place-items: center;
@@ -1190,6 +1225,74 @@ code {
   color: var(--ink-600);
   font-size: 9px;
   line-height: 1.45;
+}
+.provider-readiness {
+  display: block;
+  margin-top: 5px;
+  color: var(--ink-500);
+  font-size: 8px;
+  line-height: 1.4;
+}
+.semantic-run-note,
+.semantic-review {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  border: 1px solid color-mix(in srgb, var(--amber-500) 42%, var(--ink-200));
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--amber-100) 72%, var(--ivory-50));
+  color: var(--ink-800);
+}
+.semantic-run-note {
+  margin: 0 13px 12px;
+  padding: 8px 9px;
+  font-size: 9px;
+  line-height: 1.45;
+}
+.semantic-run-note--provider,
+.semantic-review--proposed {
+  border-color: color-mix(in srgb, var(--teal-500) 42%, var(--ink-200));
+  background: var(--teal-050);
+}
+.semantic-run-note svg,
+.semantic-review svg {
+  flex: 0 0 auto;
+  color: var(--amber-700);
+}
+.semantic-run-note--provider svg,
+.semantic-review--proposed svg {
+  color: var(--teal-700);
+}
+.semantic-review {
+  margin: 0 17px 15px;
+  padding: 9px 10px;
+  font-size: 10px;
+  line-height: 1.45;
+}
+.semantic-review__icon {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  flex: 0 0 auto;
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--amber-100) 80%, var(--ivory-50));
+}
+.semantic-review--proposed .semantic-review__icon {
+  background: var(--teal-100);
+}
+.semantic-review strong {
+  color: var(--ink-900);
+  font-size: 10px;
+}
+.semantic-review p {
+  margin: 3px 0 0;
+  color: var(--ink-700);
+}
+.semantic-review .citation {
+  display: inline-flex;
+  margin-left: 4px;
+  vertical-align: middle;
 }
 .run-state {
   display: inline-flex;
