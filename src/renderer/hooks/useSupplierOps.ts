@@ -145,6 +145,8 @@ export interface EvaluationMetricView {
 
 export interface WorkspaceView {
   id: string
+  /** Canonical shared-domain case identity used for every IPC action. */
+  caseId: string
   scenarioId: ScenarioId
   caseTitle: string
   caseNumber: string
@@ -235,6 +237,71 @@ const numberValue = (value: unknown, fallback = 0): number => {
     if (Number.isFinite(parsed)) return parsed
   }
   return fallback
+}
+
+/**
+ * Keep bridge-provided timestamps readable without presenting an opaque ISO
+ * value as user-facing case metadata. Human-authored preview labels are
+ * preserved, while valid timestamps are rendered in a stable UTC format.
+ */
+const displayDateTime = (value: unknown, fallback = '—'): string => {
+  const text = stringValue(value, '').trim()
+  if (!text) return fallback
+  const timestamp = Date.parse(text)
+  if (!Number.isFinite(timestamp)) return text
+  const date = new Date(timestamp)
+  const month = [
+    'Jan',
+    'Feb',
+    'Mar',
+    'Apr',
+    'May',
+    'Jun',
+    'Jul',
+    'Aug',
+    'Sep',
+    'Oct',
+    'Nov',
+    'Dec',
+  ][date.getUTCMonth()]
+  const day = String(date.getUTCDate()).padStart(2, '0')
+  const hours = String(date.getUTCHours()).padStart(2, '0')
+  const minutes = String(date.getUTCMinutes()).padStart(2, '0')
+  return `${day} ${month} ${date.getUTCFullYear()} · ${hours}:${minutes} UTC`
+}
+
+const displayRevision = (value: unknown, fallback: string): string => {
+  const revision = numberValue(value, Number.NaN)
+  return Number.isFinite(revision) && revision >= 0 ? `Revision ${Math.round(revision)}` : fallback
+}
+
+const policyOutcomeLabel = (value: string): string => {
+  const labels: Record<string, string> = {
+    clear: 'Clear',
+    draft_allowed: 'Draft allowed',
+    escalate: 'Escalation required',
+    blocked: 'Blocked',
+  }
+  return labels[value] ?? value.replaceAll('_', ' ')
+}
+
+const comparisonHeadline = (comparisons: readonly LineComparisonView[]): string => {
+  const reviewCount = comparisons.filter((comparison) => comparison.status !== 'match').length
+  const matchCount = comparisons.filter((comparison) => comparison.status === 'match').length
+  const lineLabel = (count: number): string => `${count} invoice ${count === 1 ? 'line' : 'lines'}`
+
+  if (reviewCount > 0) {
+    const reviewVerb = reviewCount === 1 ? 'needs' : 'need'
+    if (matchCount > 0) {
+      const matchVerb = matchCount === 1 ? 'matches' : 'match'
+      return `${lineLabel(reviewCount)} ${reviewVerb} review; ${lineLabel(matchCount)} ${matchVerb} the approved order.`
+    }
+    return `${lineLabel(reviewCount)} ${reviewVerb} review before approval.`
+  }
+  if (matchCount > 0) {
+    return `${lineLabel(matchCount)} ${matchCount === 1 ? 'reconciles' : 'reconcile'} to the approved order.`
+  }
+  return ''
 }
 
 const defaultProviderMode = (): ProviderMode => 'offline'
@@ -452,13 +519,14 @@ const makeFallback = (scenarioId: ScenarioId): WorkspaceView => {
 
   const base: WorkspaceView = {
     id: `case-${scenarioId}`,
+    caseId: `case:${scenarioId}`,
     scenarioId,
     caseTitle: 'Invoice exception review',
     caseNumber: 'INV-24018',
     supplier: 'Northwind Industrial Supply',
     status: 'ready',
     phase: 'reconcile',
-    headline: 'Two invoice lines need a grounded review before approval.',
+    headline: '1 invoice line needs review before approval.',
     happened:
       'The invoice was parsed successfully and compared with the purchase order. One unit-price variance is outside the configured tolerance.',
     why: 'The supplier invoice lists $135.00 for the gasket kit while the approved order lists $120.00. The 12.5% variance exceeds the 5% policy threshold.',
@@ -1017,10 +1085,8 @@ const normalizeWorkspace = (input: unknown, fallbackScenario: ScenarioId): Works
   return {
     ...fallback,
     ...root,
-    id: stringValue(
-      first(root, ['id', 'caseId'], first(caseRecord, ['id', 'caseId'])),
-      fallback.id,
-    ),
+    caseId: stringValue(first(root, ['caseId'], first(caseRecord, ['caseId'])), fallback.caseId),
+    id: stringValue(first(root, ['id'], first(caseRecord, ['id'], fallback.id)), fallback.id),
     scenarioId,
     caseTitle: stringValue(
       first(root, ['caseTitle', 'title', 'name'], first(caseRecord, ['title', 'name'])),
@@ -1185,7 +1251,7 @@ const normalizeCaseWorkspace = (input: unknown, fallbackScenario: ScenarioId): W
           name,
           type: stringValue(first(source, ['kind', 'contentType']), 'Source document'),
           pages: Math.max(1, Math.round(numberValue(first(source, ['pageCount', 'pages']), 1))),
-          received: stringValue(first(source, ['receivedAt', 'importedAt']), 'Source packet'),
+          received: displayDateTime(first(source, ['receivedAt', 'importedAt']), 'Source packet'),
           evidence,
         }
       })
@@ -1396,8 +1462,8 @@ const normalizeCaseWorkspace = (input: unknown, fallbackScenario: ScenarioId): W
     canApprove: Boolean(first(policyDecision, ['canApprove'], false)),
     canSubmit: Boolean(first(policyDecision, ['canSubmit'], false)),
     reason: stringValue(first(policyDecision, ['rationale']), fallback.policy.reason),
-    policyName: `Invoice variance policy · ${policyOutcome}`,
-    lastChecked: stringValue(first(workflow, ['revision']), 'local'),
+    policyName: `Invoice variance policy · ${policyOutcomeLabel(policyOutcome)}`,
+    lastChecked: displayRevision(first(workflow, ['revision']), 'Not recorded'),
   }
 
   const rawDraft = root.correctionDraft
@@ -1481,10 +1547,24 @@ const normalizeCaseWorkspace = (input: unknown, fallbackScenario: ScenarioId): W
   const happened = isPromptInjection
     ? 'An instruction-like source entry was quarantined as untrusted document data. It did not execute.'
     : stringValue(first(policyDecision, ['rationale']), fallback.happened)
+  const derivedHeadline = comparisonHeadline(comparisons)
   const why =
     discrepancies.length > 0
       ? discrepancies
-          .map((item) => stringValue(first(item, ['message'])))
+          .map((item) => {
+            const discrepancy = asRecord(item)
+            const code = stringValue(first(discrepancy, ['code']))
+            if (code === 'unit_price_mismatch') {
+              const linkedIds = arrayValue(first(discrepancy, ['lineComparisonIds']))
+              const comparison =
+                comparisons.find((candidate) => linkedIds.includes(candidate.id)) ??
+                comparisons.find((candidate) => candidate.status === 'review')
+              if (comparison) {
+                return `${comparison.description} is priced at ${comparison.invoiceValue} on the invoice versus ${comparison.expectedValue} on the approved order (${comparison.variance} variance).`
+              }
+            }
+            return stringValue(first(discrepancy, ['message']))
+          })
           .filter(Boolean)
           .join(' ')
       : hasTypedWorkspace
@@ -1506,7 +1586,10 @@ const normalizeCaseWorkspace = (input: unknown, fallbackScenario: ScenarioId): W
 
   return {
     ...fallback,
-    id: stringValue(first(metadata, ['caseId']), fallback.id),
+    // Keep the human-friendly display id separate from the canonical shared
+    // identity. Main-owned operations must use caseMetadata.caseId exactly.
+    caseId: stringValue(first(metadata, ['caseId']), fallback.caseId),
+    id: stringValue(first(root, ['id'], fallback.id), fallback.id),
     scenarioId,
     caseTitle:
       scenarioId === 'prompt-injection'
@@ -1520,7 +1603,9 @@ const normalizeCaseWorkspace = (input: unknown, fallbackScenario: ScenarioId): W
       ? 'Processing stopped: an embedded instruction was detected in the source packet.'
       : hasTypedWorkspace && invoiceLines.length === 0 && poLines.length === 0
         ? 'Source packet loaded; extraction and reconciliation are pending.'
-        : fallback.headline,
+        : scenarioId === 'price-mismatch' && derivedHeadline
+          ? derivedHeadline
+          : fallback.headline,
     happened,
     why,
     safeNextAction,
@@ -1532,7 +1617,7 @@ const normalizeCaseWorkspace = (input: unknown, fallbackScenario: ScenarioId): W
         first(purchaseOrder, ['purchaseOrderNumber'], hasTypedWorkspace ? null : undefined),
         hasTypedWorkspace ? '—' : fallback.sourcePacket.purchaseOrder,
       ),
-      receivedAt: stringValue(first(metadata, ['openedAt']), fallback.sourcePacket.receivedAt),
+      receivedAt: displayDateTime(first(metadata, ['openedAt']), fallback.sourcePacket.receivedAt),
       pageCount: files.reduce((total, file) => total + file.pages, 0),
       packetHash: stringValue(
         first(metadata, ['sourceFingerprint']),
@@ -1559,7 +1644,10 @@ const normalizeCaseWorkspace = (input: unknown, fallbackScenario: ScenarioId): W
     isPromptInjection,
     correctionRequested: Boolean(draft),
     regressionSaved: false,
-    updatedAt: stringValue(first(workflow, ['revision']), fallback.updatedAt),
+    updatedAt: displayRevision(
+      first(workflow, ['revision']),
+      displayDateTime(first(root, ['updatedAt', 'lastUpdated', 'timestamp']), fallback.updatedAt),
+    ),
     errorMessage: stringValue(first(failure, ['message']), '') || undefined,
     failureId: stringValue(first(failure, ['failureId']), '') || undefined,
     rawWorkspace: root.caseMetadata ? (input as CaseWorkspace) : undefined,
@@ -1744,7 +1832,10 @@ const callWorkspace = async (
 const withLocalDraft = (workspace: WorkspaceView, result?: unknown): WorkspaceView => {
   const resultRecord = asRecord(result)
   const resultDraft = asRecord(first(resultRecord, ['draft', 'correctionDraft'], {}))
-  const draftId = stringValue(first(resultDraft, ['draftId', 'id']), `${workspace.id}-draft-001`)
+  const draftId = stringValue(
+    first(resultDraft, ['draftId', 'id']),
+    `${workspace.caseId}-draft-001`,
+  )
   return {
     ...workspace,
     phase: 'draft',
@@ -1776,7 +1867,7 @@ const withLocalDraft = (workspace: WorkspaceView, result?: unknown): WorkspaceVi
     trace: [
       ...workspace.trace,
       {
-        id: `${workspace.id}-draft-trace`,
+        id: `${workspace.caseId}-draft-trace`,
         time: 'Just now',
         kind: 'system',
         title: 'Correction draft created',
@@ -1805,7 +1896,7 @@ const withApproval = (workspace: WorkspaceView): WorkspaceView => ({
   trace: [
     ...workspace.trace,
     {
-      id: `${workspace.id}-approval-trace`,
+      id: `${workspace.caseId}-approval-trace`,
       time: 'Just now',
       kind: 'human',
       title: 'Approval recorded',
@@ -1830,7 +1921,7 @@ const withExecution = (workspace: WorkspaceView): WorkspaceView => ({
   trace: [
     ...workspace.trace,
     {
-      id: `${workspace.id}-execution-trace`,
+      id: `${workspace.caseId}-execution-trace`,
       time: 'Just now',
       kind: 'adapter',
       title: 'Local/mock execution succeeded',
@@ -1843,8 +1934,13 @@ const withExecution = (workspace: WorkspaceView): WorkspaceView => ({
 })
 
 const operationAt = (): string => new Date().toISOString()
-const operationId = (prefix: string, workspace: WorkspaceView): string =>
-  `${prefix}:${workspace.id}:${workspace.updatedAt}`.slice(0, 160)
+const operationId = (prefix: string, workspace: WorkspaceView): string => {
+  // `updatedAt` is a presentation label for typed workspaces (for example,
+  // "Revision 1"). Convert it to an IdSchema-safe token before using it as
+  // part of an idempotency key.
+  const revisionToken = workspace.updatedAt.replace(/[^A-Za-z0-9._:-]+/gu, '-')
+  return `${prefix}:${workspace.caseId}:${revisionToken || 'current'}`.slice(0, 160)
+}
 
 export const useSupplierOps = (options: UseSupplierOpsOptions = {}): SupplierOpsState => {
   const api = options.api ?? getDefaultApi()
@@ -2003,7 +2099,7 @@ export const useSupplierOps = (options: UseSupplierOpsOptions = {}): SupplierOps
         setIsMutating(false)
       }
     },
-    [api, providerMode, scenarioId, workspace.id],
+    [api, providerMode, scenarioId, workspace.caseId],
   )
 
   const importSourcePacket = useCallback(async () => {
@@ -2045,7 +2141,7 @@ export const useSupplierOps = (options: UseSupplierOpsOptions = {}): SupplierOps
   const createCorrectedDraft = useCallback(
     () =>
       mutate(['createCorrectionDraft'], withLocalDraft, {
-        caseId: workspace.id,
+        caseId: workspace.caseId,
         idempotencyKey: operationId('draft', workspace),
         at: operationAt(),
       }),
@@ -2055,7 +2151,7 @@ export const useSupplierOps = (options: UseSupplierOpsOptions = {}): SupplierOps
   const approve = useCallback(
     () =>
       mutate(['approveDraft'], withApproval, {
-        caseId: workspace.id,
+        caseId: workspace.caseId,
         draftId: workspace.draft?.id ?? 'draft-missing',
         approvedBy: 'local operator',
         note: null,
@@ -2068,7 +2164,7 @@ export const useSupplierOps = (options: UseSupplierOpsOptions = {}): SupplierOps
   const submit = useCallback(
     () =>
       mutate(['submitDraft'], withExecution, {
-        caseId: workspace.id,
+        caseId: workspace.caseId,
         draftId: workspace.draft?.id ?? 'draft-missing',
         idempotencyKey: operationId('submit', workspace),
         at: operationAt(),
@@ -2084,7 +2180,7 @@ export const useSupplierOps = (options: UseSupplierOpsOptions = {}): SupplierOps
       ['replayFailure'],
       (current) => ({ ...current, updatedAt: 'Just now' }),
       {
-        caseId: workspace.id,
+        caseId: workspace.caseId,
         failureId: workspace.failureId,
         mode: 'offline',
         providerResult: null,

@@ -1321,7 +1321,11 @@ export function SupplierOpsApp({ api, initialScenarioId }: SupplierOpsAppProps) 
             </div>
             <div className="workspace-heading__meta">
               <span className="case-id">{workspace.id}</span>
-              <span>Updated {workspace.updatedAt}</span>
+              <span>
+                {workspace.updatedAt.startsWith('Revision ')
+                  ? workspace.updatedAt
+                  : `Updated ${workspace.updatedAt}`}
+              </span>
             </div>
           </div>
           <WorkflowRail workspace={workspace} />

@@ -142,6 +142,11 @@ function installContentSecurityPolicy(): void {
 }
 
 function preloadPath(): string {
+  const commonjsPreload = join(currentDirectory, '../preload/index.cjs')
+  if (existsSync(commonjsPreload)) return commonjsPreload
+
+  // Keep the development fallbacks for electron-vite's transient output;
+  // packaged builds always prefer the sandbox-compatible CommonJS artifact.
   const modulePreload = join(currentDirectory, '../preload/index.mjs')
   if (existsSync(modulePreload)) return modulePreload
   return join(currentDirectory, '../preload/index.js')

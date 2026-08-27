@@ -12,7 +12,9 @@ test('production Electron price-mismatch path keeps approval and submission sepa
 
   try {
     app = await electron.launch({
-      args: [resolve(projectRoot, 'out/main/index.js'), '--headless', '--disable-gpu'],
+      // Launch the repository package so Electron resolves its declared main
+      // entry and app.getAppPath() has production package semantics.
+      args: [projectRoot, '--headless', '--disable-gpu'],
       env: {
         NODE_ENV: 'test',
         ELECTRON_RENDERER_URL: '',
@@ -20,8 +22,19 @@ test('production Electron price-mismatch path keeps approval and submission sepa
       },
     })
 
+    const appPath = await app.evaluate(({ app: electronApp }) => electronApp.getAppPath())
+    expect(appPath).toBe(projectRoot)
+
     const page = await app.firstWindow()
     await page.waitForLoadState('domcontentloaded')
+
+    const desktopBridge = await page.evaluate(() => {
+      const bridge = (window as Window & { supplierOps?: unknown }).supplierOps
+      return {
+        available: typeof bridge === 'object' && bridge !== null,
+      }
+    })
+    expect(desktopBridge).toEqual({ available: true })
 
     const scenario = page.getByRole('combobox', { name: 'Choose scenario' })
     await scenario.selectOption('price-mismatch')

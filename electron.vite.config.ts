@@ -15,10 +15,19 @@ export default defineConfig({
     },
   },
   preload: {
-    plugins: [externalizeDepsPlugin()],
     build: {
+      // Sandboxed preloads may require only Electron's built-in modules. Keep
+      // browser-safe dependencies such as zod inside the standalone bundle.
+      externalizeDeps: false,
       rollupOptions: {
         input: resolve(projectRoot, 'src/preload/index.ts'),
+        // Sandboxed Electron preloads are loaded as CommonJS scripts. Keep
+        // contextIsolation/sandbox enabled and emit an unambiguous .cjs file
+        // instead of relying on the package-level ESM default.
+        output: {
+          format: 'cjs',
+          entryFileNames: 'index.cjs',
+        },
       },
     },
   },

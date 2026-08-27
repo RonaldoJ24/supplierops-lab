@@ -85,12 +85,27 @@ describe('SupplierOps Lab renderer', () => {
     expect(
       (await screen.findAllByText(/needs review|human review needed/i)).length,
     ).toBeGreaterThan(0)
+    expect(screen.getByText('case-price-mismatch')).toBeTruthy()
+    expect(screen.getByText('1 invoice line needs review before approval.')).toBeTruthy()
+    expect(
+      screen.getByText(
+        'Steel bolt is priced at MX$11.00 on the invoice versus MX$10.00 on the approved order (+10.0% variance).',
+      ),
+    ).toBeTruthy()
+    expect(screen.getByText('Invoice variance policy · Draft allowed')).toBeTruthy()
+    expect(screen.getByText('Checked Revision 1')).toBeTruthy()
+    expect(screen.getByText('Revision 1')).toBeTruthy()
+    expect(screen.getByText('15 Jan 2025 · 10:00 UTC')).toBeTruthy()
     expect(screen.getByRole('button', { name: /submit/i })).toBeDisabled()
     expect(screen.getByText(/Invoice ↔ approved order/i)).toBeTruthy()
   })
 
   it('runs the strict shared draft, approval, and submit operations', async () => {
     const api = createSupplierOpsService()
+    const createCorrectionDraft = vi.spyOn(api, 'createCorrectionDraft')
+    const approveDraft = vi.spyOn(api, 'approveDraft')
+    const submitDraft = vi.spyOn(api, 'submitDraft')
+    const saveRegression = vi.spyOn(api, 'saveRegression')
     render(<SupplierOpsApp api={api} initialScenarioId="price-mismatch" />)
     await screen.findAllByText(/needs review|human review needed/i)
 
@@ -98,11 +113,40 @@ describe('SupplierOps Lab renderer', () => {
     await waitFor(() => expect(createDraft).not.toBeDisabled())
     fireEvent.click(createDraft)
     expect(await screen.findByRole('heading', { name: 'Corrected invoice draft' })).toBeTruthy()
+    await waitFor(() =>
+      expect(createCorrectionDraft).toHaveBeenCalledWith(
+        expect.objectContaining({ caseId: 'case:price-mismatch' }),
+      ),
+    )
     fireEvent.click(screen.getByRole('button', { name: /approve explicitly/i }))
     fireEvent.click(await screen.findByRole('button', { name: /confirm approval/i }))
+    await waitFor(() =>
+      expect(approveDraft).toHaveBeenCalledWith(
+        expect.objectContaining({ caseId: 'case:price-mismatch' }),
+      ),
+    )
     await waitFor(() => expect(screen.getByRole('button', { name: /submit/i })).not.toBeDisabled())
     fireEvent.click(screen.getByRole('button', { name: /submit/i }))
+    await waitFor(() =>
+      expect(submitDraft).toHaveBeenCalledWith(
+        expect.objectContaining({ caseId: 'case:price-mismatch' }),
+      ),
+    )
     await waitFor(() => expect(screen.getByText('Local/mock adapter succeeded')).toBeTruthy())
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save regression' }))
+    await waitFor(() => expect(saveRegression).toHaveBeenCalledTimes(1))
+    expect(saveRegression).toHaveBeenCalledWith(
+      expect.objectContaining({
+        scenarioId: 'price-mismatch',
+        workspace: expect.objectContaining({
+          caseMetadata: expect.objectContaining({ caseId: 'case:price-mismatch' }),
+          correctionDraft: expect.objectContaining({ caseId: 'case:price-mismatch' }),
+          approval: expect.objectContaining({ caseId: 'case:price-mismatch' }),
+          execution: expect.objectContaining({ caseId: 'case:price-mismatch' }),
+        }),
+      }),
+    )
   })
 
   it('uses the explicit provider mode for semantic mapping and shows the offline escalation boundary', async () => {
@@ -184,6 +228,31 @@ describe('SupplierOps Lab renderer', () => {
     fireEvent.click(runButton)
     await waitFor(() => expect(runScenario.mock.calls.length).toBeGreaterThan(initialRunCount))
     expect(runScenario.mock.calls.every(([input]) => input.mode === 'offline')).toBe(true)
+  })
+
+  it('uses the canonical case ID when replaying a provider failure', async () => {
+    const api = createSupplierOpsService()
+    const runScenario = vi.spyOn(api, 'runScenario')
+    const replayFailure = vi.spyOn(api, 'replayFailure')
+    render(<SupplierOpsApp api={api} initialScenarioId="api-outage" />)
+
+    const mode = screen.getByRole('combobox', { name: 'Provider mode' }) as HTMLSelectElement
+    await waitFor(() => expect(mode).not.toBeDisabled())
+    fireEvent.change(mode, { target: { value: 'provider' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Run current scenario' }))
+    await waitFor(() =>
+      expect(runScenario).toHaveBeenCalledWith(
+        expect.objectContaining({ scenarioId: 'api-outage', mode: 'provider' }),
+      ),
+    )
+    expect((await screen.findAllByText(/rate limited/i)).length).toBeGreaterThan(0)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Replay current scenario' }))
+    await waitFor(() =>
+      expect(replayFailure).toHaveBeenCalledWith(
+        expect.objectContaining({ caseId: 'case:api-outage', mode: 'offline' }),
+      ),
+    )
   })
 
   it('surfaces a redacted IPC error envelope with its stable failure ID', async () => {

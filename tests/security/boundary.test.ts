@@ -105,6 +105,7 @@ describe('IPC and Electron security boundaries', () => {
     const preloadErrors = readFileSync(join(projectRoot, 'src/preload/errors.ts'), 'utf8')
     const main = readFileSync(join(projectRoot, 'src/main/index.ts'), 'utf8')
     const ipc = readFileSync(join(projectRoot, 'src/main/ipc.ts'), 'utf8')
+    const viteConfig = readFileSync(join(projectRoot, 'electron.vite.config.ts'), 'utf8')
 
     expect(preload).toContain("contextBridge.exposeInMainWorld('supplierOps'")
     expect(preload).not.toContain("exposeInMainWorld('ipcRenderer'")
@@ -116,6 +117,7 @@ describe('IPC and Electron security boundaries', () => {
     expect(main).toContain('sandbox: true')
     expect(main).toContain('nodeIntegration: false')
     expect(main).toContain('minWidth: 960')
+    expect(main).toContain("join(currentDirectory, '../preload/index.cjs')")
     expect(main).toContain('requestSingleInstanceLock')
     expect(main).toContain("on('second-instance'")
     expect(main).toContain('mainWindow.focus()')
@@ -125,6 +127,9 @@ describe('IPC and Electron security boundaries', () => {
     expect(ipc).toContain('parseApiInput(operation, input)')
     expect(ipc).toContain('parseApiOutput(operation, output)')
     expect(ipc).toContain('event.sender.mainFrame')
+    expect(viteConfig).toContain('externalizeDeps: false')
+    expect(viteConfig).toContain("format: 'cjs'")
+    expect(viteConfig).toContain("entryFileNames: 'index.cjs'")
   })
 
   it('keeps source packet chooser output bounded and path-free', () => {

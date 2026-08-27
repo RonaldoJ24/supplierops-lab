@@ -10,7 +10,7 @@ const outputDirectory = join(projectRoot, 'docs', 'screenshots')
 async function capture({ fileName, viewport, scenario, dark = false }) {
   const userDataDirectory = mkdtempSync(join(tmpdir(), 'supplierops-capture-'))
   const application = await electron.launch({
-    args: [resolve(projectRoot, 'out/main/index.js'), '--headless', '--disable-gpu'],
+    args: [projectRoot, '--headless', '--disable-gpu'],
     env: {
       ...process.env,
       NODE_ENV: 'test',
@@ -23,7 +23,10 @@ async function capture({ fileName, viewport, scenario, dark = false }) {
     const page = await application.firstWindow()
     await page.setViewportSize(viewport)
     await page.waitForLoadState('domcontentloaded')
+    await page.waitForFunction(() => typeof globalThis.supplierOps?.runScenario === 'function')
     await page.getByRole('combobox', { name: 'Choose scenario' }).selectOption(scenario)
+    await page.getByRole('button', { name: 'Run current scenario' }).click()
+    await page.getByText('4 files', { exact: true }).waitFor()
     await page.getByRole('heading', { name: 'Reconciliation review' }).waitFor()
     if (dark) await page.getByRole('button', { name: 'Switch to dark theme' }).click()
     await page.screenshot({ path: join(outputDirectory, fileName), fullPage: true })
