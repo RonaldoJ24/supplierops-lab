@@ -2,7 +2,11 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:f
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { ensureElectronReady, inspectElectronInstall } from '../../scripts/start-dev.mjs'
+import {
+  ensureElectronReady,
+  ensureOnlyRequested,
+  inspectElectronInstall,
+} from '../../scripts/start-dev.mjs'
 
 const temporaryDirectories: string[] = []
 
@@ -32,6 +36,12 @@ function installFixtureExecutable(electronDirectory: string, executablePath = 'e
 }
 
 describe('npm dev Electron preflight', () => {
+  it('recognizes the ensure-only flag for standalone preflight dispatch', () => {
+    expect(ensureOnlyRequested(['--ensure-only'])).toBe(true)
+    expect(ensureOnlyRequested([])).toBe(false)
+    expect(ensureOnlyRequested(['--ensure-only', '--mode', 'development'])).toBe(true)
+  })
+
   it('takes the fast path for a complete local distribution', () => {
     const fixture = createFixture()
     installFixtureExecutable(fixture.electronDirectory)

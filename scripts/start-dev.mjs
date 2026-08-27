@@ -214,6 +214,9 @@ function localElectronViteCli(projectRoot) {
 }
 
 export function runDev(args = process.argv.slice(2), projectRoot = defaultProjectRoot) {
+  if (args.includes('--ensure-only')) {
+    throw new Error('--ensure-only is only valid as a standalone Electron preflight command.')
+  }
   ensureElectronReady(projectRoot)
   const cliPath = localElectronViteCli(projectRoot)
   const child = spawn(process.execPath, [cliPath, 'dev', ...args], {
@@ -244,6 +247,10 @@ export function runDev(args = process.argv.slice(2), projectRoot = defaultProjec
   })
 }
 
+export function ensureOnlyRequested(args = process.argv.slice(2)) {
+  return args.includes('--ensure-only')
+}
+
 function isDirectInvocation() {
   const entryPoint = process.argv[1]
   return Boolean(entryPoint && pathToFileURL(resolve(entryPoint)).href === import.meta.url)
@@ -251,8 +258,18 @@ function isDirectInvocation() {
 
 if (isDirectInvocation()) {
   try {
-    const exitCode = await runDev()
-    process.exitCode = exitCode
+    const args = process.argv.slice(2)
+    if (ensureOnlyRequested(args)) {
+      if (args.length !== 1) {
+        throw new Error(
+          '--ensure-only must be the only argument to the Electron preflight command.',
+        )
+      }
+      ensureElectronReady()
+      console.log('[supplierops] Electron preflight passed; local distribution is ready.')
+    } else {
+      process.exitCode = await runDev(args)
+    }
   } catch (error) {
     console.error(startError(error))
     process.exitCode = 1
