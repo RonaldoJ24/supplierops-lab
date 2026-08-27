@@ -2,6 +2,8 @@
   "name": "supplierops-lab",
   "version": "0.1.0",
   "private": true,
+  "author": "RonaldoJ24",
+  "license": "MIT",
   "description": "Local-first SupplierOps Lab for auditable invoice exception resolution.",
   "type": "module",
   "main": "./out/main/index.js",
@@ -67,9 +69,11 @@
       "output": "release"
     },
     "mac": {
+      "icon": "build/icon.icns",
       "category": "public.app-category.business"
     },
     "linux": {
+      "icon": "build/icon.png",
       "target": [
         "AppImage"
       ],
