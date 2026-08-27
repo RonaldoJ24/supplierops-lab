@@ -10,6 +10,15 @@ const responsiveViewports = [
   { width: 1080, height: 760 },
 ] as const
 
+function electronLaunchArgs(userDataDirectory: string) {
+  return [
+    projectRoot,
+    `--user-data-dir=${userDataDirectory}`,
+    ...(process.env.CI ? [] : ['--headless']),
+    '--disable-gpu',
+  ]
+}
+
 async function expectResponsiveLayout(page: Page, viewport: (typeof responsiveViewports)[number]) {
   await page.setViewportSize(viewport)
   await expect
@@ -48,7 +57,7 @@ test('production Electron price-mismatch path keeps approval and submission sepa
     app = await electron.launch({
       // Launch the repository package so Electron resolves its declared main
       // entry and app.getAppPath() has production package semantics.
-      args: [projectRoot, `--user-data-dir=${userDataDirectory}`, '--headless', '--disable-gpu'],
+      args: electronLaunchArgs(userDataDirectory),
       env: {
         NODE_ENV: 'test',
         ELECTRON_RENDERER_URL: '',
@@ -114,7 +123,7 @@ test('production Electron layout keeps the action bar bounded', async () => {
 
   try {
     app = await electron.launch({
-      args: [projectRoot, `--user-data-dir=${userDataDirectory}`, '--headless', '--disable-gpu'],
+      args: electronLaunchArgs(userDataDirectory),
       env: {
         NODE_ENV: 'test',
         ELECTRON_RENDERER_URL: '',
