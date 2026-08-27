@@ -2,9 +2,61 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { _electron as electron } from 'playwright'
-import { expect, test } from '@playwright/test'
+import { expect, test, type Page } from '@playwright/test'
 
 const projectRoot = resolve(import.meta.dirname, '../..')
+const responsiveViewports = [
+  { width: 1440, height: 900 },
+  { width: 1080, height: 760 },
+] as const
+
+function electronLaunchArgs(userDataDirectory: string) {
+  return [
+    projectRoot,
+    `--user-data-dir=${userDataDirectory}`,
+    ...(process.env.CI ? [] : ['--headless']),
+    '--disable-gpu',
+  ]
+}
+
+function electronLaunchEnv(userDataDirectory: string) {
+  return {
+    ...process.env,
+    NODE_ENV: 'test',
+    ELECTRON_RENDERER_URL: '',
+    SUPPLIEROPS_E2E_USER_DATA: userDataDirectory,
+  }
+}
+
+async function expectResponsiveLayout(page: Page, viewport: (typeof responsiveViewports)[number]) {
+  await page.setViewportSize(viewport)
+  await expect
+    .poll(() => page.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight })))
+    .toEqual(viewport)
+
+  const geometry = await page.evaluate(() => {
+    const workspace = document.querySelector<HTMLElement>('.workspace')?.getBoundingClientRect()
+    const actionBar = document.querySelector<HTMLElement>('.action-bar')?.getBoundingClientRect()
+    if (!workspace || !actionBar) {
+      throw new Error('Responsive layout landmarks are missing from the production shell.')
+    }
+    return {
+      viewportHeight: window.innerHeight,
+      workspaceBottom: workspace.bottom,
+      actionBarTop: actionBar.top,
+      actionBarBottom: actionBar.bottom,
+      actionBarHeight: actionBar.height,
+    }
+  })
+
+  // A one-pixel tolerance absorbs fractional layout rounding while catching
+  // an action-bar overlay or the prior large narrow action-bar expansion.
+  expect(geometry.workspaceBottom).toBeLessThanOrEqual(geometry.actionBarTop + 1)
+  expect(geometry.actionBarTop).toBeGreaterThanOrEqual(-1)
+  expect(geometry.actionBarBottom).toBeLessThanOrEqual(geometry.viewportHeight + 1)
+  expect(geometry.actionBarHeight).toBeGreaterThan(0)
+  expect(geometry.actionBarHeight).toBeLessThanOrEqual(120)
+}
 
 test('production Electron price-mismatch path keeps approval and submission separate', async () => {
   const userDataDirectory = mkdtempSync(join(tmpdir(), 'supplierops-e2e-'))
@@ -14,12 +66,8 @@ test('production Electron price-mismatch path keeps approval and submission sepa
     app = await electron.launch({
       // Launch the repository package so Electron resolves its declared main
       // entry and app.getAppPath() has production package semantics.
-      args: [projectRoot, '--headless', '--disable-gpu'],
-      env: {
-        NODE_ENV: 'test',
-        ELECTRON_RENDERER_URL: '',
-        SUPPLIEROPS_E2E_USER_DATA: userDataDirectory,
-      },
+      args: electronLaunchArgs(userDataDirectory),
+      env: electronLaunchEnv(userDataDirectory),
     })
 
     const appPath = await app.evaluate(({ app: electronApp }) => electronApp.getAppPath())
@@ -68,6 +116,28 @@ test('production Electron price-mismatch path keeps approval and submission sepa
     await page.getByRole('button', { name: 'Confirm approval' }).click()
     await expect(page.getByText(/Approval recorded · submission is separate/)).toBeVisible()
     await expect(submit).toBeEnabled()
+  } finally {
+    await app?.close()
+    rmSync(userDataDirectory, { recursive: true, force: true })
+  }
+})
+
+test('production Electron layout keeps the action bar bounded', async () => {
+  const userDataDirectory = mkdtempSync(join(tmpdir(), 'supplierops-layout-e2e-'))
+  let app: Awaited<ReturnType<typeof electron.launch>> | undefined
+
+  try {
+    app = await electron.launch({
+      args: electronLaunchArgs(userDataDirectory),
+      env: electronLaunchEnv(userDataDirectory),
+    })
+    const page = await app.firstWindow()
+    await page.waitForLoadState('domcontentloaded')
+    await expect(page.getByRole('combobox', { name: 'Choose scenario' })).toBeVisible()
+
+    for (const viewport of responsiveViewports) {
+      await expectResponsiveLayout(page, viewport)
+    }
   } finally {
     await app?.close()
     rmSync(userDataDirectory, { recursive: true, force: true })

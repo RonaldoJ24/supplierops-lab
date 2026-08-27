@@ -65,6 +65,11 @@ npm run dev
 The default path is offline and fixture-backed. The UI identifies the local
 sandbox, provider mode, and whether a provider result was actually observed.
 
+`npm run dev` checks the local Electron distribution before starting
+electron-vite. If npm installed the package without its cached distribution,
+the check invokes Electron's official local installer once; if repair cannot
+complete, run `npm ci` and retry with network access.
+
 ### Optional DeepSeek provider mode
 
 Provider use is opt-in. If you want to exercise the provider path, create a

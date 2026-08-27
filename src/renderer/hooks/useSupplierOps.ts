@@ -270,6 +270,15 @@ const displayDateTime = (value: unknown, fallback = '—'): string => {
   return `${day} ${month} ${date.getUTCFullYear()} · ${hours}:${minutes} UTC`
 }
 
+const displayTraceTime = (value: unknown, fallback = '—'): string => {
+  const text = stringValue(value, '').trim()
+  if (!text) return fallback
+  const timestamp = Date.parse(text)
+  if (!Number.isFinite(timestamp)) return text.replace('T', ' ').slice(0, 19)
+  const date = new Date(timestamp)
+  return `${String(date.getUTCHours()).padStart(2, '0')}:${String(date.getUTCMinutes()).padStart(2, '0')}:${String(date.getUTCSeconds()).padStart(2, '0')} UTC`
+}
+
 const displayRevision = (value: unknown, fallback: string): string => {
   const revision = numberValue(value, Number.NaN)
   return Number.isFinite(revision) && revision >= 0 ? `Revision ${Math.round(revision)}` : fallback
@@ -526,7 +535,7 @@ const makeFallback = (scenarioId: ScenarioId): WorkspaceView => {
     supplier: 'Northwind Industrial Supply',
     status: 'ready',
     phase: 'reconcile',
-    headline: '1 invoice line needs review before approval.',
+    headline: '1 invoice line needs review; 2 invoice lines match the approved order.',
     happened:
       'The invoice was parsed successfully and compared with the purchase order. One unit-price variance is outside the configured tolerance.',
     why: 'The supplier invoice lists $135.00 for the gasket kit while the approved order lists $120.00. The 12.5% variance exceeds the 5% policy threshold.',
@@ -643,7 +652,7 @@ const makeFallback = (scenarioId: ScenarioId): WorkspaceView => {
     providerCallObserved: false,
     providerCalls: 0,
     provider: 'offline',
-    providerLabel: 'Offline AI path',
+    providerLabel: 'Offline review path',
     isPromptInjection: false,
     correctionRequested: false,
     regressionSaved: false,
@@ -964,7 +973,7 @@ const normalizeWorkspace = (input: unknown, fallbackScenario: ScenarioId): Works
           : 'complete'
         return {
           id: stringValue(first(event, ['id', 'eventId']), `trace-${index + 1}`),
-          time: stringValue(first(event, ['time', 'timestamp', 'at']), '—'),
+          time: displayTraceTime(first(event, ['time', 'timestamp', 'at'])),
           kind: safeKind(first(event, ['kind', 'type', 'actor'])),
           title: stringValue(first(event, ['title', 'name', 'event']), `Event ${index + 1}`),
           summary: stringValue(
@@ -1427,9 +1436,7 @@ const normalizeCaseWorkspace = (input: unknown, fallbackScenario: ScenarioId): W
     const attention = type === 'discrepancy_detected' || type === 'provider_failure'
     return {
       id: stringValue(first(event, ['eventId', 'id']), `trace-${index + 1}`),
-      time: stringValue(first(event, ['at', 'time']), '—')
-        .replace('T', ' ')
-        .slice(0, 19),
+      time: displayTraceTime(first(event, ['at', 'time'])),
       kind: safeKind(first(event, ['actor', 'kind'])),
       title: traceTitles[type] ?? type.replaceAll('_', ' '),
       summary: stringValue(first(event, ['message', 'summary']), 'Recorded event'),
@@ -1542,8 +1549,8 @@ const normalizeCaseWorkspace = (input: unknown, fallbackScenario: ScenarioId): W
           : scenarioId === 'semantic-match'
             ? 'Offline semantic escalation'
             : scenarioId === 'clean-match' || scenarioId === 'price-mismatch'
-              ? 'AI not needed · deterministic path'
-              : 'Offline AI path'
+              ? 'Deterministic review completed'
+              : 'Offline review path'
   const happened = isPromptInjection
     ? 'An instruction-like source entry was quarantined as untrusted document data. It did not execute.'
     : stringValue(first(policyDecision, ['rationale']), fallback.happened)
@@ -1742,7 +1749,7 @@ const errorMessageWithFailureId = (details: { message: string; failureId?: strin
 const providerSelectionLabelFor = (scenarioId: ScenarioId, mode: ProviderMode): string => {
   if (scenarioId === 'prompt-injection') return 'Blocked · provider call not permitted'
   if (scenarioId === 'clean-match' || scenarioId === 'price-mismatch') {
-    return 'AI not needed · deterministic path'
+    return 'Deterministic review completed'
   }
   return mode === 'provider'
     ? 'DeepSeek provider selected · not run'
@@ -1762,7 +1769,7 @@ const providerLabelFor = (
 ): string => {
   if (scenarioId === 'prompt-injection') return 'Blocked · provider call not permitted'
   if (scenarioId === 'clean-match' || scenarioId === 'price-mismatch') {
-    return 'AI not needed · deterministic path'
+    return 'Deterministic review completed'
   }
   if (mode === 'offline') {
     return scenarioId === 'semantic-match'
