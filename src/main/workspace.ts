@@ -24,8 +24,14 @@ import {
   type ScenarioId,
   type TraceEvent,
 } from '../shared/schemas'
-import { fixtureIdempotencyKey, fixtureInputForMode, listScenarioIds } from '../shared/fixtures'
+import {
+  fixtureIdempotencyKey,
+  fixtureInputForMode,
+  listScenarioIds,
+  loadScenarioFixture,
+} from '../shared/fixtures'
 import { runReconciliation } from '../shared/engine'
+import { evaluateScenarioRun } from '../shared/evaluation'
 import { approveDraft, createCorrectionDraft, submitDraft } from '../shared/state'
 import { stableId } from '../shared/stable'
 import {
@@ -225,9 +231,14 @@ export class WorkspaceService {
       providerTrace = interpretation.traceMetadata
     }
     const result = runReconciliation(reconciliationInput)
+    const evaluated = evaluateScenarioRun(
+      loadScenarioFixture(parsedInput.scenarioId),
+      reconciliationInput,
+      result,
+    )
     const workspace = providerTrace
-      ? attachProviderTrace(result.workspace, providerTrace)
-      : result.workspace
+      ? attachProviderTrace(evaluated.workspace, providerTrace)
+      : evaluated.workspace
     await this.persistWorkspace(workspace)
     const idempotencyKey =
       parsedInput.idempotencyKey ??

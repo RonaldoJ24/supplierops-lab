@@ -37,13 +37,24 @@ test('production Electron price-mismatch path keeps approval and submission sepa
     expect(desktopBridge).toEqual({ available: true })
 
     const scenario = page.getByRole('combobox', { name: 'Choose scenario' })
+    // The production shell opens on price-mismatch. Transition through a
+    // different scenario first so this DOM action exercises the real scenario
+    // hydration path instead of dispatching a no-op change event that would
+    // only repaint the fallback shell.
+    await scenario.selectOption('clean-match')
+    await expect(scenario).toHaveValue('clean-match')
     await scenario.selectOption('price-mismatch')
     await expect(scenario).toHaveValue('price-mismatch')
-
     const createDraft = page.getByRole('button', { name: 'Create corrected draft' })
     const approve = page.getByRole('button', { name: 'Approve explicitly' })
     const submit = page.getByRole('button', { name: 'Submit · local/mock' })
     await expect(createDraft).toBeEnabled()
+
+    const evaluation = page.locator('details.evaluation-details')
+    await evaluation.locator('summary').click()
+    await expect(evaluation).toContainText('1 observed sample')
+    await expect(evaluation).not.toContainText('Not measured for this run')
+
     await expect(approve).toBeDisabled()
     await expect(submit).toBeDisabled()
 
