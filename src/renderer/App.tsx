@@ -287,7 +287,7 @@ function TopBar({
             scenarioId === 'prompt-injection'
               ? 'Prompt-injection cases cannot call a provider.'
               : scenarioId === 'clean-match' || scenarioId === 'price-mismatch'
-                ? 'This scenario uses deterministic controls; AI is not needed, even if provider mode is selected.'
+                ? 'This scenario uses deterministic controls; selecting provider mode will not send a provider request.'
                 : 'Provider mode may send bounded document excerpts to DeepSeek.'
           }
         >
@@ -345,11 +345,14 @@ function TopBar({
 }
 
 function LoadingStrip({ isLoading }: { isLoading: boolean }) {
-  if (!isLoading) return null
   return (
-    <div className="loading-strip" role="status" aria-live="polite">
-      <span className="loading-strip__line" />
-      Refreshing the local workspace…
+    <div className={classNames('loading-slot', isLoading && 'loading-slot--active')}>
+      {isLoading && (
+        <div className="loading-strip" role="status" aria-live="polite">
+          <span className="loading-strip__line" />
+          Refreshing the local workspace…
+        </div>
+      )}
     </div>
   )
 }
@@ -370,7 +373,6 @@ function SourcePacketPanel({
     <section className="panel source-panel" aria-labelledby="source-packet-heading">
       <div className="panel__header">
         <div>
-          <p className="eyebrow">Evidence boundary</p>
           <h2 id="source-packet-heading">Source packet</h2>
         </div>
         <div className="panel__header-actions">
@@ -518,7 +520,7 @@ function StatusBanner({ workspace, onRetry }: { workspace: WorkspaceView; onRetr
         'The local adapter returned an error. No external action was taken.',
     },
     offline: {
-      title: 'Offline AI path',
+      title: 'Offline review path',
       body: 'Provider access is unavailable. Local evidence remains visible; no fresh provider result is claimed.',
     },
     'rate-limited': {
@@ -582,7 +584,6 @@ function ReconciliationPanel({
     <section className="panel reconcile-panel" aria-labelledby="reconciliation-heading">
       <div className="panel__header panel__header--reconcile">
         <div>
-          <p className="eyebrow">Decision surface</p>
           <h2 id="reconciliation-heading">Reconciliation review</h2>
         </div>
         <StatusBadge status={workspace.status} />
@@ -629,11 +630,11 @@ function ReconciliationPanel({
 
       <div className="reconcile-overview">
         <div className="overview-block">
-          <span className="overview-label">What happened</span>
+          <span className="overview-label">Exception summary</span>
           <p>{workspace.happened}</p>
         </div>
         <div className="overview-block">
-          <span className="overview-label">Why it matters</span>
+          <span className="overview-label">Control finding</span>
           <p>{workspace.why}</p>
         </div>
       </div>
@@ -827,7 +828,6 @@ function AgentRunPanel({
     <section className="panel agent-panel" aria-labelledby="agent-run-heading">
       <div className="panel__header">
         <div>
-          <p className="eyebrow">Observability</p>
           <h2 id="agent-run-heading">Agent run</h2>
         </div>
         <span className="run-state">
@@ -843,7 +843,7 @@ function AgentRunPanel({
           <strong>{workspace.providerLabel}</strong>
           <p>
             {deterministicScenario
-              ? 'AI not needed for this scenario. Deterministic controls compare the typed source facts; no provider call is expected.'
+              ? 'No external model call was used. Deterministic controls compare the typed source facts; provider data is not needed for this review.'
               : providerSelected
                 ? `DeepSeek provider mode is selected. Bounded document excerpts may leave this device when the configured bridge runs. ${providerEvidence}; payloads and auth headers never appear in this UI.`
                 : 'Offline mode is selected. Document excerpts are not sent to DeepSeek; the local path may escalate when semantic mapping is required.'}
@@ -1315,7 +1315,9 @@ export function SupplierOpsApp({ api, initialScenarioId }: SupplierOpsAppProps) 
         <main className="workspace" aria-label="Supplier exception workspace">
           <div className="workspace-heading">
             <div>
-              <p className="eyebrow">Case workspace · {SCENARIO_META[state.scenarioId].label}</p>
+              <p className="workspace-context">
+                Accounts payable exception · {SCENARIO_META[state.scenarioId].label}
+              </p>
               <h1>{workspace.caseTitle}</h1>
               <p className="workspace-heading__sub">{workspace.headline}</p>
             </div>

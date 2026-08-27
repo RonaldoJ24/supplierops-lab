@@ -16,6 +16,12 @@ describe('SupplierOps Lab renderer', () => {
     expect(screen.getByRole('button', { name: /request correction/i })).toBeTruthy()
     expect(screen.getByRole('button', { name: /inspect trace/i })).toBeTruthy()
     expect(screen.getByRole('button', { name: /approve explicitly/i })).toBeTruthy()
+    expect(screen.getByRole('region', { name: 'Case actions' })).toBeTruthy()
+    expect(screen.queryByRole('status', { name: /refreshing the local workspace/i })).toBeNull()
+    const shell = document.querySelector('.app-shell')
+    expect(shell?.children).toHaveLength(4)
+    expect(shell?.children[1]).toHaveClass('loading-slot')
+    expect(shell?.children[3]).toHaveClass('action-bar')
 
     const scenarioSelect = screen.getByRole('combobox', {
       name: 'Choose scenario',
@@ -85,6 +91,7 @@ describe('SupplierOps Lab renderer', () => {
     expect(
       (await screen.findAllByText(/needs review|human review needed/i)).length,
     ).toBeGreaterThan(0)
+    expect(screen.getByText('Deterministic review completed')).toBeTruthy()
     expect(screen.getByText('case-price-mismatch')).toBeTruthy()
     expect(screen.getByText('1 invoice line needs review before approval.')).toBeTruthy()
     expect(
@@ -189,7 +196,7 @@ describe('SupplierOps Lab renderer', () => {
     const importSourcePacket = vi.spyOn(api, 'importSourcePacket')
     render(<SupplierOpsApp api={api} initialScenarioId="price-mismatch" />)
 
-    await screen.findByText(/AI not needed · deterministic path/i)
+    await screen.findByText('Deterministic review completed')
     fireEvent.click(screen.getByRole('button', { name: 'Import source packet' }))
     await waitFor(() => expect(importSourcePacket).toHaveBeenCalledTimes(1))
     expect(importSourcePacket).toHaveBeenCalledWith({
