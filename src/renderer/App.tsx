@@ -241,7 +241,7 @@ function TopBar({
         </span>
         <span className="brand-copy">
           <strong>SupplierOps Lab</strong>
-          <small>Exception resolution console</small>
+          <small>Invoice exception review</small>
         </span>
       </div>
 
@@ -313,23 +313,24 @@ function TopBar({
           <Icon name={isRunning ? 'refresh' : 'play'} size={14} />
           {isRunning ? 'Running…' : 'Run'}
         </button>
-        <button
-          type="button"
-          className="icon-button topbar__action"
-          onClick={onReplay}
-          aria-label="Replay current scenario"
-          title="Replay current scenario"
-        >
-          <Icon name="refresh" size={16} />
-        </button>
-        <button
-          type="button"
-          className={classNames('topbar__save', regressionSaved && 'topbar__save--saved')}
-          onClick={onSave}
-        >
-          <Icon name={regressionSaved ? 'check' : 'clipboard'} size={14} />
-          {regressionSaved ? 'Regression saved' : 'Save regression'}
-        </button>
+        <details className="topbar__more">
+          <summary aria-label="More scenario actions">
+            <Icon name="activity" size={15} /> More
+          </summary>
+          <div>
+            <button type="button" onClick={onReplay}>
+              <Icon name="refresh" size={15} /> Replay scenario
+            </button>
+            <button
+              type="button"
+              className={regressionSaved ? 'topbar__save--saved' : undefined}
+              onClick={onSave}
+            >
+              <Icon name={regressionSaved ? 'check' : 'clipboard'} size={14} />
+              {regressionSaved ? 'Regression saved' : 'Save regression'}
+            </button>
+          </div>
+        </details>
         <button
           type="button"
           className="icon-button topbar__action"
@@ -394,11 +395,17 @@ function SourcePacketPanel({
       </p>
 
       {hasFiles ? (
-        <div className="source-files" aria-label="Source files">
-          {workspace.sourcePacket.files.map((file) => (
-            <SourceFileRow key={file.id} file={file} onEvidence={onEvidence} />
-          ))}
-        </div>
+        <details className="source-files-details">
+          <summary>
+            View {workspace.sourcePacket.files.length} source files
+            <Icon name="chevron-down" size={14} />
+          </summary>
+          <div className="source-files" aria-label="Source files">
+            {workspace.sourcePacket.files.map((file) => (
+              <SourceFileRow key={file.id} file={file} onEvidence={onEvidence} />
+            ))}
+          </div>
+        </details>
       ) : (
         <div className="empty-import" role="status">
           <span className="empty-import__icon" aria-hidden="true">
@@ -883,15 +890,21 @@ function AgentRunPanel({
           </button>
         </div>
       )}
-      <div className="trace-list" aria-label="Run timeline">
-        {workspace.trace.map((event) => (
-          <TraceRow key={event.id} event={event} onOpen={onTrace} />
-        ))}
-      </div>
       <div className="next-action">
         <span className="overview-label">Safe next action</span>
         <p>{workspace.safeNextAction}</p>
       </div>
+      <details className="agent-details">
+        <summary>
+          Run timeline · {workspace.trace.length} events
+          <Icon name="chevron-down" size={14} />
+        </summary>
+        <div className="trace-list" aria-label="Run timeline">
+          {workspace.trace.map((event) => (
+            <TraceRow key={event.id} event={event} onOpen={onTrace} />
+          ))}
+        </div>
+      </details>
       <details className="evaluation-details">
         <summary>
           <span>
@@ -1026,27 +1039,34 @@ function ActionBar({
         </span>
       </div>
       <div className="action-bar__buttons">
-        <button
-          type="button"
-          className="button button--quiet"
-          onClick={onRequestCorrection}
-          disabled={
-            busy || hardBlocked || workspace.status === 'empty' || workspace.correctionRequested
-          }
-          title={hardBlocked ? 'This state cannot request a correction automatically.' : undefined}
-        >
-          <Icon name="alert" size={15} />
-          {workspace.correctionRequested ? 'Correction requested' : 'Request correction'}
-        </button>
-        <button
-          type="button"
-          className="button button--quiet"
-          onClick={onInspectTrace}
-          disabled={isLoading}
-        >
-          <Icon name="activity" size={15} />
-          Inspect trace
-        </button>
+        <details className="action-bar__more">
+          <summary>More actions</summary>
+          <div>
+            <button
+              type="button"
+              className="button button--quiet"
+              onClick={onRequestCorrection}
+              disabled={
+                busy || hardBlocked || workspace.status === 'empty' || workspace.correctionRequested
+              }
+              title={
+                hardBlocked ? 'This state cannot request a correction automatically.' : undefined
+              }
+            >
+              <Icon name="alert" size={15} />
+              {workspace.correctionRequested ? 'Correction requested' : 'Request correction'}
+            </button>
+            <button
+              type="button"
+              className="button button--quiet"
+              onClick={onInspectTrace}
+              disabled={isLoading}
+            >
+              <Icon name="activity" size={15} />
+              Inspect trace
+            </button>
+          </div>
+        </details>
         <button
           type="button"
           className="button button--secondary"
