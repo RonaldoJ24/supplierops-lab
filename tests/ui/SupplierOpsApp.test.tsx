@@ -5,6 +5,12 @@ import { createSupplierOpsService } from '../../src/shared/service'
 import { describe, expect, it, vi } from 'vitest'
 import SupplierOpsApp from '../../src/renderer/App'
 
+function openDisclosure(selector: string) {
+  const summary = document.querySelector<HTMLElement>(`${selector} > summary`)
+  expect(summary).toBeTruthy()
+  fireEvent.click(summary!)
+}
+
 describe('SupplierOps Lab renderer', () => {
   it('renders the principal evidence, reconciliation, and trace surfaces', () => {
     render(<SupplierOpsApp />)
@@ -13,6 +19,7 @@ describe('SupplierOps Lab renderer', () => {
     expect(screen.getByRole('heading', { name: 'Source packet' })).toBeTruthy()
     expect(screen.getByRole('heading', { name: 'Reconciliation review' })).toBeTruthy()
     expect(screen.getByRole('heading', { name: 'Agent run' })).toBeTruthy()
+    openDisclosure('.action-bar__more')
     expect(screen.getByRole('button', { name: /request correction/i })).toBeTruthy()
     expect(screen.getByRole('button', { name: /inspect trace/i })).toBeTruthy()
     expect(screen.getByRole('button', { name: /approve explicitly/i })).toBeTruthy()
@@ -73,12 +80,14 @@ describe('SupplierOps Lab renderer', () => {
 
   it('opens focused evidence and trace disclosures with escape support', async () => {
     render(<SupplierOpsApp />)
+    openDisclosure('.source-files-details')
     fireEvent.click(screen.getAllByRole('button', { name: /open evidence/i })[0])
     expect(await screen.findByRole('heading', { name: 'Evidence' })).toBeTruthy()
     expect(screen.getByRole('dialog')).toBeTruthy()
     fireEvent.keyDown(document, { key: 'Escape' })
     await waitFor(() => expect(screen.queryByRole('heading', { name: 'Evidence' })).toBeNull())
 
+    openDisclosure('.action-bar__more')
     fireEvent.click(screen.getByRole('button', { name: /inspect trace/i }))
     expect(await screen.findByRole('heading', { name: 'Run trace' })).toBeTruthy()
     expect(screen.getByText(/sensitive provider payloads/i)).toBeTruthy()
@@ -141,6 +150,7 @@ describe('SupplierOps Lab renderer', () => {
     )
     await waitFor(() => expect(screen.getByText('Local/mock adapter succeeded')).toBeTruthy())
 
+    openDisclosure('.topbar__more')
     fireEvent.click(screen.getByRole('button', { name: 'Save regression' }))
     await waitFor(() => expect(saveRegression).toHaveBeenCalledTimes(1))
     expect(saveRegression).toHaveBeenCalledWith(
@@ -254,7 +264,8 @@ describe('SupplierOps Lab renderer', () => {
     )
     expect((await screen.findAllByText(/rate limited/i)).length).toBeGreaterThan(0)
 
-    fireEvent.click(screen.getByRole('button', { name: 'Replay current scenario' }))
+    openDisclosure('.topbar__more')
+    fireEvent.click(screen.getByRole('button', { name: 'Replay scenario' }))
     await waitFor(() =>
       expect(replayFailure).toHaveBeenCalledWith(
         expect.objectContaining({ caseId: 'case:api-outage', mode: 'offline' }),
